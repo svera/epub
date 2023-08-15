@@ -1,4 +1,4 @@
-module github.com/pirmd/epub
+module github.com/svera/epub
 
 go 1.16
 
