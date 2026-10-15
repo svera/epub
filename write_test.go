@@ -118,108 +118,29 @@ func readWriteTestFile(t *testing.T, path string) []byte {
 	return b
 }
 
-func TestWriteMetadataPartialUpdate(t *testing.T) {
-	for _, version := range []string{"2.0", "3.0"} {
-		t.Run(version, func(t *testing.T) {
-			original := strings.ReplaceAll(writeTestPackage, "VERSION", version)
-			path := createWriteTestEPUB(t, original)
-			before, err := zip.OpenReader(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer before.Close()
-			title := `New <Title> & "more"`
-			if err := WriteMetadataToFile(path, &Information{
-				Title: []string{title}, Subject: []string{},
-			}); err != nil {
-				t.Fatal(err)
-			}
-			info, err := GetMetadataFromFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(info.Title, []string{title}) || len(info.Subject) != 0 {
-				t.Fatalf("updates not applied: %+v", info)
-			}
-			if !reflect.DeepEqual(info.SubTitle, []string{"Original subtitle"}) ||
-				info.Creator[0].FullName != "Original author" || info.Series != "Old series" {
-				t.Fatalf("untouched fields changed: %+v", info)
-			}
-			after, err := Open(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer after.Close()
-			if after.Comment != before.Comment || len(after.File) != len(before.File) {
-				t.Fatal("archive properties changed")
-			}
-			for i, old := range before.File {
-				f := after.File[i]
-				if old.Name != f.Name || old.Method != f.Method || old.Comment != f.Comment {
-					t.Fatalf("entry properties changed: %s", old.Name)
-				}
-				if f.Name == after.rootfile {
-					r, err := f.Open()
-					if err != nil {
-						t.Fatal(err)
-					}
-					data, err := io.ReadAll(r)
-					r.Close()
-					if err != nil {
-						t.Fatal(err)
-					}
-					for _, fragment := range []string{
-						`<metadata custom:attribute="keep">`,
-						`<custom:extension custom:attr="value">Keep &amp; preserve</custom:extension>`,
-						`<link href="metadata.xml" rel="record"/>`,
-						original[strings.Index(original, "<manifest"):],
-					} {
-						if !bytes.Contains(data, []byte(fragment)) {
-							t.Errorf("lost original XML: %s", fragment)
-						}
-					}
-					if bytes.Contains(data, []byte("Old sort")) || bytes.Contains(data, []byte(`id="title-sort"`)) {
-						t.Error("stale refinements retained")
-					}
-					continue
-				}
-				oldRaw, err := old.OpenRaw()
-				if err != nil {
-					t.Fatal(err)
-				}
-				newRaw, err := f.OpenRaw()
-				if err != nil {
-					t.Fatal(err)
-				}
-				oldData, err := io.ReadAll(oldRaw)
-				if err != nil {
-					t.Fatal(err)
-				}
-				newData, err := io.ReadAll(newRaw)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !bytes.Equal(oldData, newData) || !reflect.DeepEqual(old.FileHeader, f.FileHeader) {
-					t.Errorf("untouched archive entry changed: %s", f.Name)
-				}
-			}
-			stat, err := os.Stat(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if stat.Mode().Perm() != 0640 {
-				t.Errorf("permissions changed: %v", stat.Mode())
-			}
-		})
+func readWriteTestMetadata(t *testing.T, path string) *Information {
+	t.Helper()
+	info, err := GetMetadataFromFile(path)
+	if err != nil {
+		t.Fatal(err)
 	}
+	return info
 }
 
-func TestWriteMetadataAllFields(t *testing.T) {
-	for _, version := range []string{"2.0", "3.0"} {
-		t.Run(version, func(t *testing.T) {
-			path := createWriteTestEPUB(t, strings.ReplaceAll(writeTestPackage, "VERSION", version))
-			series, index := "New series", "2.5"
-			u := &Information{
+func TestWriteMetadataUpdates(t *testing.T) {
+	cases := []struct {
+		name   string
+		update Information
+	}{
+		{
+			name: "partial",
+			update: Information{
+				Title: []string{`New <Title> & "more"`}, Subject: []string{},
+			},
+		},
+		{
+			name: "all fields",
+			update: Information{
 				Identifier: []Identifier{{Scheme: "ISBN", Value: "978-test"}},
 				Title:      []string{"Title", "Another title"}, SubTitle: []string{"Subtitle"},
 				Language: []string{"es", "en"}, Contributor: []Author{{FullName: "Translator", Role: "trl", FileAs: "Translator"}},
@@ -230,41 +151,123 @@ func TestWriteMetadataAllFields(t *testing.T) {
 				Relation: []string{"Relation"}, Rights: []string{"Rights"},
 				Source: []string{"Source"}, Subject: []string{"Subject"}, Type: []string{"Type"},
 				Meta:   []GenericMetadata{{Name: "vendor:new", Content: "new content"}},
-				Series: series, SeriesIndex: index,
-			}
-			if err := WriteMetadataToFile(path, u); err != nil {
-				t.Fatal(err)
-			}
-			got, err := GetMetadataFromFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := *u
-			want.Series, want.SeriesIndex = series, index
-			if version == "2.0" {
-				want.Meta = append(append([]GenericMetadata(nil), want.Meta...),
-					GenericMetadata{Name: "calibre:series", Content: series},
-					GenericMetadata{Name: "calibre:series_index", Content: index})
-			}
-			if !reflect.DeepEqual(got, &want) {
-				t.Fatalf("round trip mismatch:\ngot:  %+v\nwant: %+v", got, want)
-			}
-			if err := WriteMetadataToFile(path, u); err != nil {
-				t.Fatalf("repeated update: %v", err)
-			}
-			if err := WriteMetadataToFile(path, &Information{
-				SubTitle: []string{}, Meta: []GenericMetadata{},
-			}, "Series"); err != nil {
-				t.Fatal(err)
-			}
-			got, err = GetMetadataFromFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got.Series != "" || got.SeriesIndex != "" || len(got.SubTitle) != 0 || len(got.Meta) != 0 {
-				t.Fatalf("clear failed: %+v", got)
-			}
-		})
+				Series: "New series", SeriesIndex: "2.5",
+			},
+		},
+	}
+	for _, version := range []string{"2.0", "3.0"} {
+		for _, tc := range cases {
+			t.Run(version+"/"+tc.name, func(t *testing.T) {
+				original := strings.ReplaceAll(writeTestPackage, "VERSION", version)
+				path := createWriteTestEPUB(t, original)
+				var want *Information
+				if tc.name == "partial" {
+					want = readWriteTestMetadata(t, path)
+					want.Title, want.Subject = tc.update.Title, []string{}
+				} else {
+					expected := tc.update
+					want = &expected
+					if version == "2.0" {
+						want.Meta = append(append([]GenericMetadata(nil), want.Meta...),
+							GenericMetadata{Name: "calibre:series", Content: want.Series},
+							GenericMetadata{Name: "calibre:series_index", Content: want.SeriesIndex})
+					}
+				}
+				before, err := zip.OpenReader(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer before.Close()
+				if err := WriteMetadataToFile(path, &tc.update); err != nil {
+					t.Fatal(err)
+				}
+				info := readWriteTestMetadata(t, path)
+				if !reflect.DeepEqual(info, want) {
+					t.Fatalf("round trip mismatch:\ngot:  %+v\nwant: %+v", info, want)
+				}
+				after, err := Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer after.Close()
+				if after.Comment != before.Comment || len(after.File) != len(before.File) {
+					t.Fatal("archive properties changed")
+				}
+				for i, old := range before.File {
+					f := after.File[i]
+					if old.Name != f.Name || old.Method != f.Method || old.Comment != f.Comment {
+						t.Fatalf("entry properties changed: %s", old.Name)
+					}
+					if f.Name == after.rootfile {
+						r, err := f.Open()
+						if err != nil {
+							t.Fatal(err)
+						}
+						data, err := io.ReadAll(r)
+						r.Close()
+						if err != nil {
+							t.Fatal(err)
+						}
+						for _, fragment := range []string{
+							`<metadata custom:attribute="keep">`,
+							`<custom:extension custom:attr="value">Keep &amp; preserve</custom:extension>`,
+							`<link href="metadata.xml" rel="record"/>`,
+							original[strings.Index(original, "<manifest"):],
+						} {
+							if !bytes.Contains(data, []byte(fragment)) {
+								t.Errorf("lost original XML: %s", fragment)
+							}
+						}
+						if bytes.Contains(data, []byte("Old sort")) || bytes.Contains(data, []byte(`id="title-sort"`)) {
+							t.Error("stale refinements retained")
+						}
+						continue
+					}
+					oldRaw, err := old.OpenRaw()
+					if err != nil {
+						t.Fatal(err)
+					}
+					newRaw, err := f.OpenRaw()
+					if err != nil {
+						t.Fatal(err)
+					}
+					oldData, err := io.ReadAll(oldRaw)
+					if err != nil {
+						t.Fatal(err)
+					}
+					newData, err := io.ReadAll(newRaw)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !bytes.Equal(oldData, newData) || !reflect.DeepEqual(old.FileHeader, f.FileHeader) {
+						t.Errorf("untouched archive entry changed: %s", f.Name)
+					}
+				}
+				stat, err := os.Stat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if stat.Mode().Perm() != 0640 {
+					t.Errorf("permissions changed: %v", stat.Mode())
+				}
+				if err := WriteMetadataToFile(path, &tc.update); err != nil {
+					t.Fatalf("repeated update: %v", err)
+				}
+				info = readWriteTestMetadata(t, path)
+				if !reflect.DeepEqual(info, want) {
+					t.Fatalf("repeated update changed metadata:\ngot: %+v\nwant: %+v", info, want)
+				}
+				if err := WriteMetadataToFile(path, &Information{
+					SubTitle: []string{}, Meta: []GenericMetadata{},
+				}, "Series"); err != nil {
+					t.Fatal(err)
+				}
+				info = readWriteTestMetadata(t, path)
+				if info.Series != "" || info.SeriesIndex != "" || len(info.SubTitle) != 0 || len(info.Meta) != 0 {
+					t.Fatalf("clear failed: %+v", info)
+				}
+			})
+		}
 	}
 }
 
@@ -273,19 +276,21 @@ func TestWriteMetadataFailuresPreserveOriginal(t *testing.T) {
 		name   string
 		pkg    string
 		update *Information
+		clear  []string
 	}{
-		{"nil update", writeTestPackage, nil},
-		{"remove primary identifier", writeTestPackage, &Information{Identifier: []Identifier{}}},
-		{"malformed XML", "<package>", &Information{Title: []string{"Title"}}},
-		{"missing metadata", `<package xmlns="http://www.idpf.org/2007/opf"/>`, &Information{Title: []string{"Title"}}},
-		{"invalid XML character", writeTestPackage, &Information{Title: []string{"bad\x00title"}}},
-		{"invalid UTF-8", writeTestPackage, &Information{Title: []string{"bad\xfftitle"}}},
-		{"invalid attribute", writeTestPackage, &Information{Creator: []Author{{FullName: "Author", FileAs: "\x00"}}}},
+		{"nil update", writeTestPackage, nil, nil},
+		{"remove primary identifier", writeTestPackage, &Information{Identifier: []Identifier{}}, nil},
+		{"malformed XML", "<package>", &Information{Title: []string{"Title"}}, nil},
+		{"missing metadata", `<package xmlns="http://www.idpf.org/2007/opf"/>`, &Information{Title: []string{"Title"}}, nil},
+		{"invalid XML character", writeTestPackage, &Information{Title: []string{"bad\x00title"}}, nil},
+		{"invalid UTF-8", writeTestPackage, &Information{Title: []string{"bad\xfftitle"}}, nil},
+		{"invalid attribute", writeTestPackage, &Information{Creator: []Author{{FullName: "Author", FileAs: "\x00"}}}, nil},
+		{"unknown clear field", writeTestPackage, &Information{}, []string{"Unknown"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := createWriteTestEPUB(t, strings.ReplaceAll(tc.pkg, "VERSION", "3.0"))
 			before := readWriteTestFile(t, path)
-			if err := WriteMetadataToFile(path, tc.update); err == nil {
+			if err := WriteMetadataToFile(path, tc.update, tc.clear...); err == nil {
 				t.Fatal("expected an error")
 			}
 			if !bytes.Equal(before, readWriteTestFile(t, path)) {
@@ -311,14 +316,10 @@ func TestWriteMetadataSeriesRefinements(t *testing.T) {
 <meta property="belongs-to-collection" id="other-collection">Other collection</meta>
 <meta property="collection-type" refines="#other-collection">set</meta>`, 1)
 	path := createWriteTestEPUB(t, pkg)
-	index := "4"
-	if err := WriteMetadataToFile(path, &Information{SeriesIndex: index}); err != nil {
+	if err := WriteMetadataToFile(path, &Information{SeriesIndex: "4"}); err != nil {
 		t.Fatal(err)
 	}
-	info, err := GetMetadataFromFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	info := readWriteTestMetadata(t, path)
 	if info.Series != "Old series" || info.SeriesIndex != "4" {
 		t.Fatalf("index-only update changed series: %+v", info)
 	}
@@ -338,57 +339,48 @@ func TestWriteMetadataSeriesRefinements(t *testing.T) {
 	if err := WriteMetadataToFile(path, &Information{}, "Series"); err != nil {
 		t.Fatal(err)
 	}
-	info, err = GetMetadataFromFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	info = readWriteTestMetadata(t, path)
 	if info.Series != "" || info.SeriesIndex != "" {
 		t.Fatalf("unrelated set treated as series after clearing: %+v", info)
 	}
 }
 
 func TestWriteMetadataClearFields(t *testing.T) {
+	cases := []struct {
+		name       string
+		update     Information
+		clear      string
+		wantSeries string
+		wantIndex  string
+	}{
+		{name: "empty strings preserve series", wantSeries: "Old series", wantIndex: "1"},
+		{
+			name: "clear index overrides update", update: Information{SeriesIndex: "9"},
+			clear: "SeriesIndex", wantSeries: "Old series",
+		},
+		{
+			name:   "clear series overrides update",
+			update: Information{Series: "Replacement", SeriesIndex: "9"}, clear: "Series",
+		},
+	}
 	for _, version := range []string{"2.0", "3.0"} {
-		t.Run(version, func(t *testing.T) {
-			path := createWriteTestEPUB(t, strings.ReplaceAll(writeTestPackage, "VERSION", version))
-			before := readWriteTestFile(t, path)
-			if err := WriteMetadataToFile(path, &Information{}, "Unknown"); err == nil {
-				t.Fatal("expected unknown clear field error")
-			}
-			if !bytes.Equal(before, readWriteTestFile(t, path)) {
-				t.Fatal("invalid clear list modified original")
-			}
-			if err := WriteMetadataToFile(path, &Information{Series: "", SeriesIndex: ""}); err != nil {
-				t.Fatal(err)
-			}
-			info, err := GetMetadataFromFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if info.Series != "Old series" || info.SeriesIndex != "1" {
-				t.Fatalf("empty strings changed series: %+v", info)
-			}
-			if err := WriteMetadataToFile(path, &Information{SeriesIndex: "9"}, "SeriesIndex"); err != nil {
-				t.Fatal(err)
-			}
-			info, err = GetMetadataFromFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if info.Series != "Old series" || info.SeriesIndex != "" {
-				t.Fatalf("index clear changed series or failed to override update: %+v", info)
-			}
-			if err := WriteMetadataToFile(path, &Information{Series: "Replacement", SeriesIndex: "9"}, "Series"); err != nil {
-				t.Fatal(err)
-			}
-			info, err = GetMetadataFromFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if info.Series != "" || info.SeriesIndex != "" {
-				t.Fatalf("series clear did not override update: %+v", info)
-			}
-		})
+		for _, tc := range cases {
+			t.Run(version+"/"+tc.name, func(t *testing.T) {
+				path := createWriteTestEPUB(t, strings.ReplaceAll(writeTestPackage, "VERSION", version))
+				var clear []string
+				if tc.clear != "" {
+					clear = []string{tc.clear}
+				}
+				if err := WriteMetadataToFile(path, &tc.update, clear...); err != nil {
+					t.Fatal(err)
+				}
+				info := readWriteTestMetadata(t, path)
+				if info.Series != tc.wantSeries || info.SeriesIndex != tc.wantIndex {
+					t.Fatalf("got series %q, index %q; want %q, %q",
+						info.Series, info.SeriesIndex, tc.wantSeries, tc.wantIndex)
+				}
+			})
+		}
 	}
 }
 
@@ -466,10 +458,7 @@ func TestWriteMetadataNoopAndPrefixedPackage(t *testing.T) {
 	if err := WriteMetadataToFile(path, &Information{Title: []string{"New title"}}); err != nil {
 		t.Fatal(err)
 	}
-	info, err := GetMetadataFromFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	info := readWriteTestMetadata(t, path)
 	if !reflect.DeepEqual(info.Title, []string{"New title"}) {
 		t.Fatalf("prefixed package update failed: %+v", info)
 	}
@@ -504,17 +493,11 @@ func TestWriteMetadataExistingEPUBs(t *testing.T) {
 			if err := os.WriteFile(path, readWriteTestFile(t, file), 0600); err != nil {
 				t.Fatal(err)
 			}
-			before, err := GetMetadataFromFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
+			before := readWriteTestMetadata(t, path)
 			if err := WriteMetadataToFile(path, &Information{Title: []string{"Updated title"}}); err != nil {
 				t.Fatal(err)
 			}
-			after, err := GetMetadataFromFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
+			after := readWriteTestMetadata(t, path)
 			before.Title = []string{"Updated title"}
 			if !reflect.DeepEqual(after, before) {
 				t.Fatalf("unexpected metadata changes:\ngot: %+v\nwant: %+v", after, before)
