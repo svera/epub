@@ -152,35 +152,17 @@ err := epub.WriteMetadataToFile("book.epub", &epub.Information{
 })
 ```
 
-The writer automatically sets `refines` to the corresponding field value's XML ID,
-reusing existing IDs by position or generating IDs for new values.
-Any supplied `Meta.Refines` is overridden. Declare custom vocabulary prefixes
-through `Information.Prefixes`, a map from prefix names (without `:`) to absolute
-IRIs. The writer merges them into the EPUB 3 package's `prefix` attribute,
-preserving unrelated declarations. Repeating an identical mapping is a no-op;
-conflicting mappings, invalid names, and relative IRIs are rejected before the
-file is replaced. Omitted or empty maps leave existing declarations unchanged.
-Reading metadata returns the package's explicit declarations in `Prefixes`.
-Prefix updates require EPUB 3.
-Any nonempty property name is accepted, including standard properties.
-Explicit refinements override automatically generated properties of the same
-name (for example, `role` overrides `Author.Role`).
-Empty properties are rejected. Explicit refinements require EPUB 3; for custom
-EPUB 2 attributes, use `Attributes` as described below.
-Optional `Meta` attributes (`ID`, `Scheme`, `Lang`, and `Dir`) are supported;
-IDs must be unique in the package.
+Refinements require EPUB 3. The writer sets `refines` automatically, overriding
+`Meta.Refines`. Properties must be nonempty; explicit properties override generated
+ones such as `role`. Optional `ID`, `Scheme`, `Lang`, and `Dir` are supported;
+IDs must be unique.
 
-Reading metadata returns attached refinements. Standard author role/file-as,
-subtitle classification, and series position are still interpreted by the
-corresponding convenience fields.
-Updating a value replaces its refinements; include the refinements you want to
-keep. Omitting the entire field list preserves its existing metadata.
-For series, refinements can be updated without repeating the value; a nil
-refinement list preserves an omitted series value's properties. An explicit
-empty refinement list clears its refinements while keeping the series value.
-`Series.Refinements` targets the collection; `SeriesIndex.Refinements` targets
-its position element. Calibre series entries in `Meta` remain controlled by
-`Series` and `SeriesIndex`.
+`Prefixes` maps vocabulary prefixes to absolute IRIs and merges them into the
+package's `prefix` attribute. Existing declarations are preserved; conflicting
+mappings are rejected. Reading metadata returns these declarations and refinements,
+with standard author, subtitle, and series properties exposed through convenience
+fields. `Series.Refinements` targets the collection; `SeriesIndex.Refinements`
+targets its position.
 
 The CLI accepts plain strings or refined objects for text and series values,
 including a mixture in the same list:
@@ -208,30 +190,21 @@ Existing plain-string JSON update files remain accepted.
 
 #### Custom XML attributes (EPUB 2 and EPUB 3)
 
-Use `Attributes []xml.Attr` to attach custom attributes directly to any metadata
-value, including authors, titles, identifiers, dates, legacy meta entries, and
-series values. For example, matching a Sigil-style author attribute:
+Use `Attributes []xml.Attr` (from `encoding/xml`) on any metadata value:
 
 ```go
 err := epub.WriteMetadataToFile("book.epub", &epub.Information{
     Creator: []epub.Author{{
         FullName: "Horacio",
         Role: "aut",
-        Attributes: []xml.Attr{ // import "encoding/xml"
+        Attributes: []xml.Attr{
             {Name: xml.Name{Local: "wd_id"}, Value: "Q6197"},
         },
     }},
 })
 ```
 
-This writes the attribute on the creator itself (alongside its managed ID and
-role), not in a wrapper:
-
-```xml
-<dc:creator wd_id="Q6197" ...>Horacio</dc:creator>
-```
-
-The CLI accepts the same attributes in JSON:
+This writes `wd_id="Q6197"` directly on the creator. Equivalent CLI JSON:
 
 ```json
 {
@@ -243,17 +216,8 @@ The CLI accepts the same attributes in JSON:
 }
 ```
 
-Attributes are returned when reading metadata. Updating a value replaces its
-attributes; include any you want to keep. Omitting a field preserves it.
-For series, an omitted value with nil `Attributes` preserves existing attributes;
-an explicit empty list clears them without changing the series value.
-
-For namespaced attributes, set `xml.Name.Space` to the namespace URI and `Local`
-to the local name, not a colon-qualified name. The writer reuses namespace
-declarations inherited from `<package>` and `<metadata>`. Missing declarations
-are added once on `<metadata>`, not repeated on individual values.
-
-Use `Information.Namespaces` to choose XML prefixes explicitly:
+For namespaced attributes, use the URI in `Name.Space` and the local name in
+`Name.Local`. Choose a prefix with `Namespaces`:
 
 ```go
 const vocab = "https://github.com/svera/coreander/vocab/"
@@ -270,30 +234,16 @@ err := epub.WriteMetadataToFile("book.epub", &epub.Information{
 })
 ```
 
-This declares `xmlns:cdr` on `<metadata>` and writes `cdr:wd_id` on the creator.
-Inherited `dc` and `opf` bindings are reused without redeclaration on the creator.
-This works in EPUB 2 and EPUB 3; EPUB 3 still writes role/file-as as native
-refinements rather than OPF attributes.
+The writer declares `cdr` once on `<metadata>` and reuses inherited namespaces.
+Without a preference, it reuses an existing prefix or generates one.
+`Namespaces` is a write-only option for either EPUB version, separate from EPUB 3
+vocabulary `Prefixes`. Prefixes must be valid, nonreserved names with absolute
+URIs; conflicting bindings are rejected.
 
-`Namespaces` is a write option (also accepted in CLI JSON), not returned when
-reading metadata. Existing declarations are preserved automatically. Prefixes
-must be nonempty XML names and URIs must be absolute; reserved names and conflicting
-inherited bindings are rejected. An identical mapping is a no-op. When multiple
-preferred prefixes name the same URI, the alphabetically first is used.
-Omitting `Namespaces` reuses existing bindings or generates a prefix when needed.
-
-XML namespace declarations are separate from `Information.Prefixes`, which only
-declares EPUB 3 property vocabularies in the package's `prefix` attribute.
-Invalid names, duplicate attributes, and invalid XML characters are rejected.
-Do not use custom attributes to override managed fields such as `id` or
-`opf:role`; use their existing API fields instead.
-
-Direct custom attributes are not EPUB 3 refinements. Sigil accepting them does
-not guarantee EPUB validation or support in other readers.
-The writer no longer generates JSON `epub:refinement` entries, nor does the reader
-interpret them. Existing entries are left as ordinary `Information.Meta`
-values; to remove them, write that list back with those entries excluded
-(or use an empty list to clear all non-series legacy entries).
+Attributes round-trip on read. Use existing fields for managed attributes such
+as `id` and `opf:role`. Custom attributes may not pass EPUB validation or be
+interpreted by other readers. Old `epub:refinement` wrappers are ordinary `Meta`
+entries; exclude them when writing `Meta` to remove them.
 
 The writer copies other ZIP entries without recompression, preserves package XML
 outside the updated metadata, and replaces the original file only after completing
