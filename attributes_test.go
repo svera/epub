@@ -22,8 +22,8 @@ func TestMetadataAttributes(t *testing.T) {
 				Identifier:  []Identifier{{Value: "ID", Attributes: attributes}},
 				Date:        []Date{{Stamp: "2026", Attributes: attributes}},
 				Meta:        []GenericMetadata{{Name: "vendor:id", Content: "ID", Attributes: attributes}},
-				Series:      MetadataValue{Value: seriesText("Series"), Attributes: attributes},
-				SeriesIndex: MetadataValue{Value: seriesText("1"), Attributes: attributes},
+				Series:      MetadataValue{Value: NewMetadataValue("Series").Value, Attributes: attributes},
+				SeriesIndex: MetadataValue{Value: NewMetadataValue("1").Value, Attributes: attributes},
 			}
 			for iteration := 0; iteration < 2; iteration++ {
 				if err := WriteMetadataToFile(path, update); err != nil {

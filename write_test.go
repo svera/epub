@@ -58,43 +58,10 @@ func TestEncodeMetadataRejectsInvalidElements(t *testing.T) {
 	}
 }
 
-func seriesText(value string) *string {
-	return &value
-}
-
 func TestInformationUpdateJSON(t *testing.T) {
-	update := Information{
-		Title: []MetadataValue{NewMetadataValue("New title")}, Series: MetadataValue{Value: seriesText("Series")}, SeriesIndex: MetadataValue{Value: seriesText("2")},
-	}
-	data, err := json.Marshal(update)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got Information
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(got, update) {
-		t.Fatalf("metadata did not round trip: %s", data)
-	}
-	if err := json.Unmarshal([]byte(`{"Subject":[]}`), &got); err != nil {
-		t.Fatal(err)
-	}
-	if got.Subject == nil || len(got.Subject) != 0 {
-		t.Fatal("empty JSON array did not preserve an explicit clear")
-	}
-	var omitted Information
-	if err := json.Unmarshal([]byte(`{}`), &omitted); err != nil {
-		t.Fatal(err)
-	}
-	if omitted.Title != nil || omitted.Series.Value != nil || omitted.SeriesIndex.Value != nil {
-		t.Fatalf("omitted fields are not nil: %+v", omitted)
-	}
-}
-
-func TestOptionalSeriesJSON(t *testing.T) {
 	for _, input := range []string{
 		`{}`,
+		`{"Title":["New title"],"Series":"Series","SeriesIndex":"2"}`,
 		`{"Series":null,"SeriesIndex":null}`,
 		`{"Series":"","SeriesIndex":""}`,
 		`{"Series":"Collection","SeriesIndex":"2"}`,
@@ -116,12 +83,22 @@ func TestOptionalSeriesJSON(t *testing.T) {
 				t.Fatal(err)
 			}
 			if !reflect.DeepEqual(update, decoded) {
-				t.Fatalf("optional series state lost: %s -> %s", input, encoded)
+				t.Fatalf("metadata state lost: %s -> %s", input, encoded)
+			}
+			if input == `{}` && (update.Title != nil || !update.Series.omitted() || !update.SeriesIndex.omitted()) {
+				t.Fatalf("omitted fields are not nil: %+v", update)
 			}
 			if input == `{"Series":"","SeriesIndex":""}` && (update.Series.Value == nil || update.SeriesIndex.Value == nil) {
 				t.Fatal("explicit empty strings must retain non-nil value pointers")
 			}
 		})
+	}
+	var update Information
+	if err := json.Unmarshal([]byte(`{"Subject":[]}`), &update); err != nil {
+		t.Fatal(err)
+	}
+	if update.Subject == nil || len(update.Subject) != 0 {
+		t.Fatal("empty JSON array did not preserve an explicit clear")
 	}
 	for _, input := range []string{
 		`{"Series":[]}`, `{"Series":1}`, `{"Series":false}`,
@@ -515,8 +492,8 @@ func TestWriteStructuredFieldRefinements(t *testing.T) {
 		Contributor: []Author{{FullName: "Contributor", Refinements: refinement("contributor")}},
 		Date:        []Date{{Stamp: "2026-10-15", Refinements: refinement("date")}},
 		Meta:        []GenericMetadata{{Name: "vendor:new", Content: "Legacy", Refinements: refinement("legacy")}},
-		Series:      MetadataValue{Value: seriesText("Series"), Refinements: refinement("series")},
-		SeriesIndex: MetadataValue{Value: seriesText("2"), Refinements: refinement("index")},
+		Series:      MetadataValue{Value: NewMetadataValue("Series").Value, Refinements: refinement("series")},
+		SeriesIndex: MetadataValue{Value: NewMetadataValue("2").Value, Refinements: refinement("index")},
 	}
 	for iteration := 0; iteration < 2; iteration++ {
 		if err := WriteMetadataToFile(path, update); err != nil {
@@ -568,7 +545,7 @@ func TestWriteStructuredFieldRefinements(t *testing.T) {
 		}
 	}
 	// Updating just the index must retain the collection's custom refinements.
-	if err := WriteMetadataToFile(path, &Information{SeriesIndex: MetadataValue{Value: seriesText("3")}}); err != nil {
+	if err := WriteMetadataToFile(path, &Information{SeriesIndex: NewMetadataValue("3")}); err != nil {
 		t.Fatal(err)
 	}
 	got := readWriteTestMetadata(t, path)
@@ -667,7 +644,7 @@ func TestWriteMetadataUpdates(t *testing.T) {
 				Relation: []MetadataValue{NewMetadataValue("Relation")}, Rights: []MetadataValue{NewMetadataValue("Rights")},
 				Source: []MetadataValue{NewMetadataValue("Source")}, Subject: []MetadataValue{NewMetadataValue("Subject")}, Type: []MetadataValue{NewMetadataValue("Type")},
 				Meta:   []GenericMetadata{{Name: "vendor:new", Content: "new content"}},
-				Series: MetadataValue{Value: seriesText("New series")}, SeriesIndex: MetadataValue{Value: seriesText("2.5")},
+				Series: NewMetadataValue("New series"), SeriesIndex: NewMetadataValue("2.5"),
 			},
 		},
 	}
@@ -930,7 +907,7 @@ func TestWriteMetadataSeriesRefinements(t *testing.T) {
 <meta property="belongs-to-collection" id="other-collection">Other collection</meta>
 <meta property="collection-type" refines="#other-collection">set</meta>`, 1)
 	path := createWriteTestEPUB(t, pkg)
-	if err := WriteMetadataToFile(path, &Information{SeriesIndex: MetadataValue{Value: seriesText("4")}}); err != nil {
+	if err := WriteMetadataToFile(path, &Information{SeriesIndex: NewMetadataValue("4")}); err != nil {
 		t.Fatal(err)
 	}
 	info := readWriteTestMetadata(t, path)
@@ -976,12 +953,12 @@ func TestWriteMetadataClearFields(t *testing.T) {
 			wantSeries: "Old series",
 		},
 		{
-			name: "clear index overrides update", update: Information{SeriesIndex: MetadataValue{Value: seriesText("9")}},
+			name: "clear index overrides update", update: Information{SeriesIndex: NewMetadataValue("9")},
 			clear: "SeriesIndex", wantSeries: "Old series",
 		},
 		{
 			name:   "clear series overrides update",
-			update: Information{Series: MetadataValue{Value: seriesText("Replacement")}, SeriesIndex: MetadataValue{Value: seriesText("9")}}, clear: "Series",
+			update: Information{Series: NewMetadataValue("Replacement"), SeriesIndex: NewMetadataValue("9")}, clear: "Series",
 		},
 	}
 	for _, version := range []string{"2.0", "3.0"} {

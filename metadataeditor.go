@@ -64,20 +64,20 @@ func (e *metadataEditor) addMeta(id, property, refines, value string, attributes
 	e.addElement(opfNamespace, "meta", value, append(attrs, attributes...)...)
 }
 
-func (e *metadataEditor) replace(name string, subtitle bool) []string {
-	var ids []string
+func (e *metadataEditor) replace(name string, subtitle bool) []metadataChild {
+	var previous []metadataChild
 	for i, c := range e.source.children {
 		if c.name == (xml.Name{Space: dcNamespace, Local: name}) && (name != "title" || c.subtitle == subtitle) {
 			e.removed[i] = true
-			ids = append(ids, c.id)
+			previous = append(previous, c)
 		}
 	}
-	return ids
+	return previous
 }
 
-func (e *metadataEditor) elementID(ids []string, i int) string {
-	if i < len(ids) && ids[i] != "" {
-		return ids[i]
+func (e *metadataEditor) elementID(previous []metadataChild, i int) string {
+	if i < len(previous) && previous[i].id != "" {
+		return previous[i].id
 	}
 	return e.newID()
 }
@@ -101,13 +101,7 @@ func (e *metadataEditor) updateTextFields(u, existing *Information) error {
 		if f.values == nil {
 			continue
 		}
-		var previous []metadataChild
-		for _, child := range e.source.children {
-			if child.name == (xml.Name{Space: dcNamespace, Local: f.name}) && (f.name != "title" || child.subtitle == f.subtitle) {
-				previous = append(previous, child)
-			}
-		}
-		ids := e.replace(f.name, f.subtitle)
+		previous := e.replace(f.name, f.subtitle)
 		for i, value := range f.values {
 			preserveRefinements := value.Value == nil && value.Refinements == nil
 			if value.Value == nil {
@@ -125,7 +119,7 @@ func (e *metadataEditor) updateTextFields(u, existing *Information) error {
 					}
 				}
 			}
-			id := e.elementID(ids, i)
+			id := e.elementID(previous, i)
 			e.addElement(dcNamespace, f.name, value.String(), append([]xml.Attr{attr("id", id)}, value.Attributes...)...)
 			if preserveRefinements {
 				if e.preservedRefinements == nil {
@@ -145,17 +139,17 @@ func (e *metadataEditor) updateTextFields(u, existing *Information) error {
 
 func (e *metadataEditor) updateIdentifiers(values []Identifier, primaryID string) {
 	if values != nil {
-		ids := e.replace("identifier", false)
+		previous := e.replace("identifier", false)
 		// Keep the package's primary identifier reference valid even when
 		// the original primary identifier was not the first one.
-		for i, id := range ids {
-			if id == primaryID {
-				ids[0], ids[i] = ids[i], ids[0]
+		for i, child := range previous {
+			if child.id == primaryID {
+				previous[0], previous[i] = previous[i], previous[0]
 				break
 			}
 		}
 		for i, value := range values {
-			id := e.elementID(ids, i)
+			id := e.elementID(previous, i)
 			attrs := []xml.Attr{attr("id", id)}
 			if value.Scheme != "" {
 				attrs = append(attrs, xml.Attr{Name: xml.Name{Space: opfNamespace, Local: "scheme"}, Value: value.Scheme})
@@ -170,9 +164,9 @@ func (e *metadataEditor) updateAuthors(name string, values []Author) {
 	if values == nil {
 		return
 	}
-	ids := e.replace(name, false)
+	previous := e.replace(name, false)
 	for i, a := range values {
-		id := e.elementID(ids, i)
+		id := e.elementID(previous, i)
 		attrs := []xml.Attr{attr("id", id)}
 		for _, v := range []struct{ name, value string }{{"role", a.Role}, {"file-as", a.FileAs}} {
 			if v.value == "" || hasProperty(a.Refinements, v.name) {
@@ -215,9 +209,9 @@ func hasProperty(values []Meta, property string) bool {
 
 func (e *metadataEditor) updateDates(values []Date) {
 	if values != nil {
-		ids := e.replace("date", false)
+		previous := e.replace("date", false)
 		for i, value := range values {
-			id := e.elementID(ids, i)
+			id := e.elementID(previous, i)
 			attrs := []xml.Attr{attr("id", id)}
 			if value.Event != "" {
 				attrs = append(attrs, xml.Attr{Name: xml.Name{Space: opfNamespace, Local: "event"}, Value: value.Event})
@@ -261,33 +255,15 @@ func (e *metadataEditor) updateLegacyMetadata(values []GenericMetadata) error {
 }
 
 func (e *metadataEditor) updateSeries(u *Information, clear map[string]bool, meta []MetaLegacy) error {
-	if u.Series.Value == nil && u.SeriesIndex.Value == nil && u.Series.Refinements == nil &&
-		u.SeriesIndex.Refinements == nil && u.Series.Attributes == nil && u.SeriesIndex.Attributes == nil &&
+	if u.Series.omitted() && u.SeriesIndex.omitted() &&
 		!clear["Series"] && !clear["SeriesIndex"] {
 		return nil
 	}
-	series, index := getSeries(meta)
 	oldSeries, oldIndex := seriesValues(meta)
-	seriesRefinements, indexRefinements := u.Series.Refinements, u.SeriesIndex.Refinements
-	seriesAttributes, indexAttributes := u.Series.Attributes, u.SeriesIndex.Attributes
-	if u.Series.Value == nil && seriesAttributes == nil {
-		seriesAttributes = oldSeries.Attributes
-	}
-	if u.SeriesIndex.Value == nil && indexAttributes == nil {
-		indexAttributes = oldIndex.Attributes
-	}
-	if u.Series.Value == nil && seriesRefinements == nil {
-		seriesRefinements = oldSeries.Refinements
-	}
-	if u.SeriesIndex.Value == nil && indexRefinements == nil {
-		indexRefinements = oldIndex.Refinements
-	}
-	if u.Series.Value != nil {
-		series = *u.Series.Value
-	}
-	if u.SeriesIndex.Value != nil {
-		index = *u.SeriesIndex.Value
-	}
+	seriesValue, indexValue := u.Series.withExisting(oldSeries), u.SeriesIndex.withExisting(oldIndex)
+	series, index := seriesValue.String(), indexValue.String()
+	seriesRefinements, indexRefinements := seriesValue.Refinements, indexValue.Refinements
+	seriesAttributes, indexAttributes := seriesValue.Attributes, indexValue.Attributes
 	clearSeries := clear["Series"] || (u.Series.Value != nil && *u.Series.Value == "")
 	clearIndex := clear["SeriesIndex"] || (u.SeriesIndex.Value != nil && *u.SeriesIndex.Value == "")
 	if clearSeries {
@@ -342,15 +318,13 @@ func (e *metadataEditor) updateSeries(u *Information, clear map[string]bool, met
 			if !hasProperty(seriesRefinements, "collection-type") {
 				e.addMeta("", "collection-type", collectionID, "series")
 			}
-			if index != "" {
+			if index != "" && !hasProperty(seriesRefinements, "group-position") {
 				indexID := ""
 				if len(indexRefinements) != 0 {
 					indexID = e.newID()
 				}
-				if !hasProperty(seriesRefinements, "group-position") {
-					e.addMeta(indexID, "group-position", collectionID, index, indexAttributes...)
-					e.addRefinements(indexID, indexRefinements)
-				}
+				e.addMeta(indexID, "group-position", collectionID, index, indexAttributes...)
+				e.addRefinements(indexID, indexRefinements)
 			}
 		}
 	} else {
@@ -385,17 +359,21 @@ func (e *metadataEditor) refreshModifiedTime(prefixesChanged bool) {
 
 func (e *metadataEditor) removeRefinements() {
 	// Remove refinements of replaced elements, including chained refinements.
+	removedTargets := make(map[string]bool)
+	for i, c := range e.source.children {
+		if e.removed[i] && c.id != "" && !e.preservedRefinements[c.id] {
+			removedTargets["#"+c.id] = true
+		}
+	}
 	for changed := true; changed; {
 		changed = false
 		for i, c := range e.source.children {
-			if e.removed[i] || c.refines == "" {
+			if e.removed[i] || !removedTargets[c.refines] {
 				continue
 			}
-			for j, target := range e.source.children {
-				if e.removed[j] && target.id != "" && c.refines == "#"+target.id && !e.preservedRefinements[target.id] {
-					e.removed[i], changed = true, true
-					break
-				}
+			e.removed[i], changed = true, true
+			if c.id != "" && !e.preservedRefinements[c.id] {
+				removedTargets["#"+c.id] = true
 			}
 		}
 	}

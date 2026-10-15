@@ -30,6 +30,23 @@ func (v MetadataValue) String() string {
 	return *v.Value
 }
 
+func (v MetadataValue) omitted() bool {
+	return v.Value == nil && v.Refinements == nil && v.Attributes == nil
+}
+
+func (v MetadataValue) withExisting(existing MetadataValue) MetadataValue {
+	if v.Value == nil {
+		v.Value = existing.Value
+		if v.Refinements == nil {
+			v.Refinements = existing.Refinements
+		}
+		if v.Attributes == nil {
+			v.Attributes = existing.Attributes
+		}
+	}
+	return v
+}
+
 func (v MetadataValue) MarshalJSON() ([]byte, error) {
 	if v.Value != nil && v.Refinements == nil && v.Attributes == nil {
 		return json.Marshal(*v.Value)
@@ -50,11 +67,8 @@ func (v MetadataValue) MarshalJSON() ([]byte, error) {
 }
 
 func (v *MetadataValue) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
-		*v = MetadataValue{}
-		return nil
-	}
-	if len(bytes.TrimSpace(data)) != 0 && bytes.TrimSpace(data)[0] == '"' {
+	data = bytes.TrimSpace(data)
+	if len(data) != 0 && data[0] == '"' {
 		var text string
 		if err := json.Unmarshal(data, &text); err != nil {
 			return err
@@ -143,10 +157,10 @@ type Information struct {
 func (m Information) MarshalJSON() ([]byte, error) {
 	type information Information
 	var series, index *MetadataValue
-	if m.Series.Value != nil || m.Series.Refinements != nil || m.Series.Attributes != nil {
+	if !m.Series.omitted() {
 		series = &m.Series
 	}
-	if m.SeriesIndex.Value != nil || m.SeriesIndex.Refinements != nil || m.SeriesIndex.Attributes != nil {
+	if !m.SeriesIndex.omitted() {
 		index = &m.SeriesIndex
 	}
 	return json.Marshal(struct {
@@ -292,32 +306,36 @@ func getMeta(mdata *Metadata) *Information {
 }
 
 func seriesValues(meta []MetaLegacy) (series, index MetadataValue) {
-	seriesText, indexText := getSeries(meta)
-	if seriesText != "" {
-		series = NewMetadataValue(seriesText)
-	}
-	if indexText != "" {
-		index = NewMetadataValue(indexText)
-	}
 	if collection := seriesCollection(meta); collection != nil {
+		series = NewMetadataValue(collection.Value)
 		series.Refinements = refinementsFor(collection.ID, meta, "collection-type", "group-position")
 		series.Attributes = collection.Attributes
+		positionFound := false
 		for _, m := range meta {
 			if m.Meta != nil && m.Refines == "#"+collection.ID && m.Property == "group-position" {
+				if !positionFound && m.Value != "" {
+					index.Value = &m.Meta.Value
+				}
+				positionFound = true
 				index.Refinements = refinementsFor(m.ID, meta)
 				index.Attributes = m.Attributes
 			}
 		}
-	} else {
-		for _, m := range meta {
-			switch m.Name {
-			case "calibre:series":
-				series.Refinements = refinementsFor(m.ID, meta)
-				series.Attributes = m.Attributes
-			case "calibre:series_index":
-				index.Refinements = refinementsFor(m.ID, meta)
-				index.Attributes = m.Attributes
-			}
+		return series, index
+	}
+	for _, m := range meta {
+		var target *MetadataValue
+		switch m.Name {
+		case "calibre:series":
+			target = &series
+		case "calibre:series_index":
+			target = &index
+		default:
+			continue
+		}
+		*target = MetadataValue{Refinements: refinementsFor(m.ID, meta), Attributes: m.Attributes}
+		if m.Content != "" {
+			target.Value = NewMetadataValue(m.Content).Value
 		}
 	}
 	return series, index
@@ -360,84 +378,38 @@ func getAuth(auth AuthorElt, meta []MetaLegacy) Author {
 		Attributes: auth.Attributes,
 	}
 
-	for _, m := range meta {
-		if m.Meta == nil || auth.ID == "" || m.Refines != "#"+auth.ID {
-			continue
-		}
-
+	for _, m := range refinementsFor(auth.ID, meta) {
 		switch m.Property {
 		case "role":
 			a.Role = m.Value
 		case "file-as":
 			a.FileAs = m.Value
 		default:
-			if m.Property != "" {
-				a.Refinements = append(a.Refinements, *m.Meta)
-			}
+			a.Refinements = append(a.Refinements, m)
 		}
 	}
 
 	return a
 }
 
-// getTitles extracts titles and subtitles from elements and metadata.
-// It prioritizes elements with title-type metadata to identify subtitles.
 func getTitles(elt []Element, meta []MetaLegacy) (title []MetadataValue, subtitle []MetadataValue) {
-	// Build a map of element ID to its metadata for O(1) lookup
-	metaMap := make(map[string][]MetaLegacy)
-	for _, m := range meta {
-		if m.Refines != "" {
-			metaMap[m.Refines] = append(metaMap[m.Refines], m)
-		}
-	}
-
 	for i, e := range elt {
-		// Check if this element has title-type metadata
-		if metas, exists := metaMap["#"+e.ID]; exists {
-			for _, m := range metas {
-				if m.Property == "title-type" {
-					switch m.Value {
-					case "subtitle":
-						subtitle = append(subtitle, MetadataValue{Value: &elt[i].Value, Refinements: refinementsFor(e.ID, meta, "title-type"), Attributes: e.Attributes})
-						goto nextElt
-					}
-				}
-			}
-		}
-		title = append(title, MetadataValue{Value: &elt[i].Value, Refinements: refinementsFor(e.ID, meta), Attributes: e.Attributes})
-	nextElt:
-	}
-
-	return title, subtitle
-}
-
-// getSeries extracts series information from Meta.
-// It supports both Calibre-like EPUB 2 series coding and EPUB3 collection metadata.
-// If both are available, EPUB3 is preferred.
-func getSeries(meta []MetaLegacy) (series string, seriesIndex string) {
-	// First, look for EPUB3 collection metadata (priority)
-	if m := seriesCollection(meta); m != nil {
-		series = m.Value
-		for _, mm := range meta {
-			if mm.Meta != nil && mm.Refines == "#"+m.ID && mm.Property == "group-position" {
-				seriesIndex = mm.Value
+		value := MetadataValue{Value: &elt[i].Value, Refinements: refinementsFor(e.ID, meta), Attributes: e.Attributes}
+		isSubtitle := false
+		for _, m := range value.Refinements {
+			if m.Property == "title-type" && m.Value == "subtitle" {
+				isSubtitle = true
 				break
 			}
 		}
-		return series, seriesIndex
-	}
-
-	// Fall back to Calibre-style metadata
-	for _, m := range meta {
-		switch m.Name {
-		case "calibre:series":
-			series = m.Content
-		case "calibre:series_index":
-			seriesIndex = m.Content
+		if isSubtitle {
+			value.Refinements = refinementsFor(e.ID, meta, "title-type")
+			subtitle = append(subtitle, value)
+		} else {
+			title = append(title, value)
 		}
 	}
-
-	return series, seriesIndex
+	return title, subtitle
 }
 
 func seriesCollection(meta []MetaLegacy) *Meta {
