@@ -404,6 +404,15 @@
           "Dir": "",
           "ID": "",
           "Lang": "",
+          "Attributes": [
+            {
+              "Name": {
+                "Space": "http://www.w3.org/2001/XMLSchema-instance",
+                "Local": "type"
+              },
+              "Value": "dcterms:RFC4646"
+            }
+          ],
           "Value": "en"
         }
       ],
@@ -598,6 +607,15 @@
           "Dir": "",
           "ID": "",
           "Lang": "",
+          "Attributes": [
+            {
+              "Name": {
+                "Space": "http://www.w3.org/2001/XMLSchema-instance",
+                "Local": "type"
+              },
+              "Value": "dcterms:RFC4646"
+            }
+          ],
           "Value": "fr"
         }
       ],
@@ -820,6 +838,15 @@
           "Dir": "",
           "ID": "",
           "Lang": "",
+          "Attributes": [
+            {
+              "Name": {
+                "Space": "http://www.w3.org/2001/XMLSchema-instance",
+                "Local": "type"
+              },
+              "Value": "dcterms:RFC4646"
+            }
+          ],
           "Value": "en"
         }
       ],
@@ -1152,6 +1179,15 @@
           "Dir": "",
           "ID": "",
           "Lang": "",
+          "Attributes": [
+            {
+              "Name": {
+                "Space": "http://www.w3.org/2001/XMLSchema-instance",
+                "Local": "type"
+              },
+              "Value": "dcterms:RFC4646"
+            }
+          ],
           "Value": "zh"
         }
       ],
@@ -2314,6 +2350,15 @@
           "Dir": "",
           "ID": "",
           "Lang": "",
+          "Attributes": [
+            {
+              "Name": {
+                "Space": "http://www.w3.org/2001/XMLSchema-instance",
+                "Local": "type"
+              },
+              "Value": "dcterms:RFC4646"
+            }
+          ],
           "Value": "fr"
         }
       ],
@@ -2517,6 +2562,15 @@
           "Dir": "",
           "ID": "",
           "Lang": "",
+          "Attributes": [
+            {
+              "Name": {
+                "Space": "http://www.w3.org/2001/XMLSchema-instance",
+                "Local": "type"
+              },
+              "Value": "dcterms:RFC4646"
+            }
+          ],
           "Value": "fr"
         }
       ],
@@ -2769,6 +2823,15 @@
           "Dir": "",
           "ID": "",
           "Lang": "",
+          "Attributes": [
+            {
+              "Name": {
+                "Space": "http://www.w3.org/2001/XMLSchema-instance",
+                "Local": "type"
+              },
+              "Value": "dcterms:RFC4646"
+            }
+          ],
           "Value": "fr"
         }
       ],
@@ -3054,6 +3117,15 @@
           "Dir": "",
           "ID": "",
           "Lang": "",
+          "Attributes": [
+            {
+              "Name": {
+                "Space": "http://www.w3.org/2001/XMLSchema-instance",
+                "Local": "type"
+              },
+              "Value": "dcterms:RFC4646"
+            }
+          ],
           "Value": "fr"
         }
       ],

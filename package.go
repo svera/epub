@@ -108,7 +108,9 @@ type Element struct {
 	// Lang specifies the language used in the contents and attribute
 	// values of the carrying element and its descendants, as defined in
 	// section 2.12 Language Identification of [XML].
-	Lang string `xml:"xml:lang,attr,omitempty"`
+	Lang string `xml:"http://www.w3.org/XML/1998/namespace lang,attr,omitempty"`
+
+	Attributes []xml.Attr `xml:",any,attr" json:",omitempty"`
 
 	// Value is the Element's value
 	Value string `xml:",chardata"`
@@ -154,6 +156,7 @@ type DateElt struct {
 
 // Meta element provides a generic means of including package metadata.
 type Meta struct {
+	Attributes []xml.Attr `xml:",any,attr" json:",omitempty"`
 	// Dir attribute specifies the base text direction of the content and
 	// attribute values of the carrying element and its descendants.
 	// Allowed values are ltr (left-to-right) and rtl (right-to-left).
@@ -173,7 +176,7 @@ type Meta struct {
 	Scheme string `xml:"scheme,attr,omitempty"`
 	// Lang specifies the language used in the contents and attribute
 	// values of the carrying element and its descendants.
-	Lang string `xml:"xml:lang,attr,omitempty"`
+	Lang string `xml:"http://www.w3.org/XML/1998/namespace lang,attr,omitempty"`
 
 	// Value is the Element's value
 	Value string `xml:",chardata"`
@@ -309,5 +312,44 @@ func newPackageDocument(r io.Reader) (*PackageDocument, error) {
 	if err := decodeXML(r, &opf); err != nil {
 		return nil, err
 	}
+	if opf.Metadata != nil {
+		normalizeMetadataAttributes(opf.Metadata)
+	}
 	return opf, nil
+}
+
+func normalizeMetadataAttributes(m *Metadata) {
+	for _, values := range [][]Element{m.Title, m.Language, m.Coverage, m.Description,
+		m.Format, m.Publisher, m.Relation, m.Rights, m.Source, m.Subject, m.Type} {
+		for i := range values {
+			values[i].Attributes = customXMLAttributes(values[i].Attributes)
+		}
+	}
+	for _, value := range m.Identifier {
+		value.Attributes = customXMLAttributes(value.Attributes)
+	}
+	for _, values := range [][]AuthorElt{m.Creator, m.Contributor} {
+		for _, value := range values {
+			value.Attributes = customXMLAttributes(value.Attributes)
+		}
+	}
+	for _, value := range m.Date {
+		value.Attributes = customXMLAttributes(value.Attributes)
+	}
+	for i := range m.Meta {
+		if m.Meta[i].Meta != nil {
+			m.Meta[i].Meta.Attributes = customXMLAttributes(m.Meta[i].Meta.Attributes)
+		}
+	}
+}
+
+func customXMLAttributes(attributes []xml.Attr) []xml.Attr {
+	var result []xml.Attr
+	for _, a := range attributes {
+		if a.Name.Space != "xmlns" && a.Name.Local != "xmlns" &&
+			a.Name.Space != "http://www.w3.org/2000/xmlns/" {
+			result = append(result, a)
+		}
+	}
+	return result
 }

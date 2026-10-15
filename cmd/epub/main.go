@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,16 +13,36 @@ import (
 	"github.com/pirmd/epub"
 )
 
+func readMetadataUpdate(r io.Reader) (*epub.Information, error) {
+	decoder := json.NewDecoder(r)
+	decoder.DisallowUnknownFields()
+	var update *epub.Information
+	if err := decoder.Decode(&update); err != nil {
+		return nil, err
+	}
+	if update == nil {
+		return nil, fmt.Errorf("metadata update must be a JSON object")
+	}
+	var extra interface{}
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("expected a single metadata update object")
+	}
+	return update, nil
+}
+
 func stringify(v interface{}, pretty bool) string {
 	var b []byte
 	var err error
-	
+
 	if pretty {
 		b, err = json.MarshalIndent(v, "", "  ")
 	} else {
 		b, err = json.Marshal(v)
 	}
-	
+
 	if err != nil {
 		return fmt.Sprintf("%+v", v)
 	}
@@ -67,9 +89,9 @@ func printField(metadata *epub.Information, field string) {
 	case "subject":
 		fmt.Printf("%v\n", metadata.Subject)
 	case "series":
-		if metadata.Series != "" {
+		if metadata.Series.String() != "" {
 			fmt.Printf("%s", metadata.Series)
-			if metadata.SeriesIndex != "" {
+			if metadata.SeriesIndex.String() != "" {
 				fmt.Printf(" #%s", metadata.SeriesIndex)
 			}
 			fmt.Println()
@@ -94,20 +116,22 @@ func printField(metadata *epub.Information, field string) {
 
 func main() {
 	var (
-		pretty   bool
-		compact  bool
-		fields   string
-		help     bool
+		pretty  bool
+		compact bool
+		fields  string
+		help    bool
+		write   string
 	)
 
 	flag.BoolVar(&pretty, "pretty", true, "Pretty-print JSON output")
 	flag.BoolVar(&compact, "compact", false, "Compact JSON output (no indentation)")
 	flag.StringVar(&fields, "field", "", "Print only specific field(s). Comma-separated list: title,author,language,identifier,publisher,date,description,series,etc.")
 	flag.BoolVar(&help, "help", false, "Print help and exit")
+	flag.StringVar(&write, "write", "", "Update metadata from a JSON file (use - for stdin); omitted fields are preserved")
 
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [options] <epub files>\n\n", filepath.Base(os.Args[0]))
-		fmt.Fprintf(flag.CommandLine.Output(), "Command-line tool for reading EPUB metadata.\n\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "Command-line tool for reading and updating EPUB metadata.\n\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "Options:\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(flag.CommandLine.Output(), "\n")
@@ -123,6 +147,7 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), "  %s --field title book.epub     # Print only title\n", filepath.Base(os.Args[0]))
 		fmt.Fprintf(flag.CommandLine.Output(), "  %s --field author,language book.epub  # Print author and language\n", filepath.Base(os.Args[0]))
 		fmt.Fprintf(flag.CommandLine.Output(), "  %s file1.epub file2.epub       # Process multiple files\n", filepath.Base(os.Args[0]))
+		fmt.Fprintf(flag.CommandLine.Output(), "  %s --write metadata.json book.epub  # Update metadata in place\n", filepath.Base(os.Args[0]))
 	}
 
 	flag.Parse()
@@ -144,6 +169,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	var update *epub.Information
+	if write != "" {
+		var err error
+		if write == "-" {
+			update, err = readMetadataUpdate(os.Stdin)
+		} else {
+			var data []byte
+			data, err = os.ReadFile(write)
+			if err == nil {
+				update, err = readMetadataUpdate(bytes.NewReader(data))
+			}
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading metadata update: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	hasError := false
 	for i, arg := range args {
 		if len(args) > 1 {
@@ -153,6 +196,13 @@ func main() {
 			fmt.Printf("=== %s ===\n", arg)
 		}
 
+		if update != nil {
+			if err := epub.WriteMetadataToFile(arg, update); err != nil {
+				fmt.Fprintf(os.Stderr, "Error updating epub %s: %v\n", arg, err)
+				hasError = true
+				continue
+			}
+		}
 		metadata, err := epub.GetMetadataFromFile(arg)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error while parsing epub %s: %v\n", arg, err)
