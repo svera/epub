@@ -40,20 +40,18 @@ const writeTestPackage = `<?xml version="1.0" encoding="UTF-8"?>
 <guide><reference type="text" title="Start" href="chapter.xhtml"/></guide>
 </package>`
 
-func TestEncodeMetadataRejectsInvalidElements(t *testing.T) {
-	start := xml.StartElement{Name: xml.Name{Space: opfNamespace, Local: "meta"}}
-	for _, tokens := range [][]xml.Token{
-		{start},
-		{start, start, start.End()},
-		{start, xml.CharData("text"), xml.EndElement{Name: xml.Name{Local: "other"}}},
-		{start, xml.CharData("\x00"), start.End()},
+func TestBuildMetadataRejectsInvalidElements(t *testing.T) {
+	for _, element := range []metadataElement{
+		{name: xml.Name{Space: opfNamespace, Local: "meta"}, value: "\x00"},
+		{name: xml.Name{Space: dcNamespace, Local: "title"}, attributes: []xml.Attr{attr("bad name", "value")}},
+		{name: xml.Name{Space: dcNamespace, Local: "title"}, attributes: []xml.Attr{attr("id", "one"), attr("id", "two")}},
 	} {
 		namespaces, err := newXMLNamespaces(nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := encodeMetadata(tokens, namespaces); err == nil {
-			t.Fatalf("accepted invalid metadata tokens: %+v", tokens)
+		if _, err := buildMetadata([]metadataElement{element}, namespaces); err == nil {
+			t.Fatalf("accepted invalid metadata element: %+v", element)
 		}
 	}
 }
@@ -405,7 +403,7 @@ func TestWriteTextFieldRefinements(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				source, err := scanPackageXML(data)
+				source, err := parsePackageXML(data)
 				if err != nil {
 					t.Fatal(err)
 				}

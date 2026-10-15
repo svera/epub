@@ -1,6 +1,8 @@
 github.com/antzucaro/matchr v0.0.0-20191224151129-ab6ba461ddec/go.mod h1:v3ZDlfVAL1OrkKHbGSFFK60k0/7hruHPDq2XMs9Gu6U=
 github.com/antzucaro/matchr v0.0.0-20210222213004-b04723ef80f0 h1:R/qAiUxFT3mNgQaNqJe0IVznjKRNm23ohAIh9lgtlzc=
 github.com/antzucaro/matchr v0.0.0-20210222213004-b04723ef80f0/go.mod h1:v3ZDlfVAL1OrkKHbGSFFK60k0/7hruHPDq2XMs9Gu6U=
+github.com/beevik/etree v1.8.1 h1:MchsAnqPGCGsfQezhwcouHPlAHlcAOqWpyCVZoyWfjU=
+github.com/beevik/etree v1.8.1/go.mod h1:bh4zJxiIr62SOf9pRzN7UUYaEDa9HEKafK25+sLc0Gc=
 github.com/mattn/go-runewidth v0.0.10 h1:CoZ3S2P7pvtP45xOtBw+/mDL2z0RKI576gSkzRRpdGg=
 github.com/mattn/go-runewidth v0.0.10/go.mod h1:RAqKPSqVFrSLVXbA8x7dzmKdmGzieGRCM46jaSJTDAk=
 github.com/pirmd/text v0.6.0 h1:54JEPLm0gXgtiW0XNtnWpqaE7OgZLl4lobC4p2cBg+Q=

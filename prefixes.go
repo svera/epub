@@ -1,18 +1,17 @@
 package epub
 
 import (
-	"bytes"
-	"encoding/xml"
 	"fmt"
 	"net/url"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/beevik/etree"
 )
 
 var (
 	vocabularyPrefix = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9._-]*$`)
-	xmlAttribute     = regexp.MustCompile(`([^\s=<>/"']+)\s*=\s*("[^"]*"|'[^']*')`)
 )
 
 func validatePrefix(prefix, iri string) error {
@@ -51,67 +50,40 @@ func parsePrefixes(value string) (map[string]string, error) {
 	return prefixes, nil
 }
 
-func updatePackagePrefixes(data []byte, pkg *PackageDocument, additions map[string]string) ([]byte, error) {
+func updatePackagePrefixes(root *etree.Element, additions map[string]string) (bool, error) {
 	if len(additions) == 0 {
-		return data, nil
+		return false, nil
 	}
-	if !strings.HasPrefix(pkg.Version, "3") {
-		return nil, fmt.Errorf("package prefix declarations require EPUB 3; custom EPUB 2 attributes do not need them")
+	if !strings.HasPrefix(root.SelectAttrValue("version", ""), "3") {
+		return false, fmt.Errorf("package prefix declarations require EPUB 3; custom EPUB 2 attributes do not need them")
 	}
-	existing, err := parsePrefixes(pkg.Prefix)
+	value := root.SelectAttrValue("prefix", "")
+	existing, err := parsePrefixes(value)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	var added []string
 	for prefix, iri := range additions {
 		if err := validatePrefix(prefix, iri); err != nil {
-			return nil, err
+			return false, err
 		}
 		if previous, exists := existing[prefix]; exists {
 			if previous != iri {
-				return nil, fmt.Errorf("prefix %q is already declared as %q, not %q", prefix, previous, iri)
+				return false, fmt.Errorf("prefix %q is already declared as %q, not %q", prefix, previous, iri)
 			}
 			continue
 		}
 		added = append(added, prefix+": "+iri)
 	}
 	if len(added) == 0 {
-		return data, nil
+		return false, nil
 	}
 	sort.Strings(added)
-	value := strings.TrimSpace(pkg.Prefix)
+	value = strings.TrimSpace(value)
 	if value != "" {
 		value += " "
 	}
 	value += strings.Join(added, " ")
-	var escaped bytes.Buffer
-	if err := xml.EscapeText(&escaped, []byte(value)); err != nil {
-		return nil, err
-	}
-	// Replace only the package's prefix attribute, preserving all other XML.
-	decoder := xml.NewDecoder(bytes.NewReader(data))
-	for {
-		start := int(decoder.InputOffset())
-		token, err := decoder.Token()
-		if err != nil {
-			return nil, err
-		}
-		if _, ok := token.(xml.StartElement); !ok {
-			continue
-		}
-		end := int(decoder.InputOffset())
-		for _, match := range xmlAttribute.FindAllSubmatchIndex(data[start:end], -1) {
-			if string(data[start+match[2]:start+match[3]]) == "prefix" {
-				from, to := start+match[4]+1, start+match[5]-1
-				return bytes.Join([][]byte{data[:from], escaped.Bytes(), data[to:]}, nil), nil
-			}
-		}
-		insert := end - 1
-		if data[insert-1] == '/' {
-			insert--
-		}
-		attribute := append([]byte(` prefix="`), escaped.Bytes()...)
-		attribute = append(attribute, '"')
-		return bytes.Join([][]byte{data[:insert], attribute, data[insert:]}, nil), nil
-	}
+	root.CreateAttr("prefix", value)
+	return true, nil
 }

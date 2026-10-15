@@ -1,8 +1,9 @@
 module github.com/pirmd/epub
 
-go 1.21
+go 1.23.0
 
 require (
+	github.com/beevik/etree v1.8.1
 	github.com/pirmd/verify v0.8.0
 	golang.org/x/net v0.25.0
 )

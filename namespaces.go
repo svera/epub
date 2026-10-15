@@ -1,10 +1,11 @@
 package epub
 
 import (
-	"bytes"
 	"encoding/xml"
 	"fmt"
 	"sort"
+
+	"github.com/beevik/etree"
 )
 
 const xmlNamespace = "http://www.w3.org/XML/1998/namespace"
@@ -91,30 +92,8 @@ func (n *xmlNamespaces) name(name xml.Name, attribute bool) xml.Name {
 	return xml.Name{Local: name.Local}
 }
 
-func (n *xmlNamespaces) declare(data []byte, source *packageEditState, generatedLength int) ([]byte, error) {
-	var declarations bytes.Buffer
+func (n *xmlNamespaces) declare(metadata *etree.Element) {
 	for _, prefix := range sortedNamespacePrefixes(n.added) {
-		declarations.WriteString(` xmlns:` + prefix + `="`)
-		if err := xml.EscapeText(&declarations, []byte(n.added[prefix])); err != nil {
-			return nil, err
-		}
-		declarations.WriteByte('"')
+		metadata.CreateAttr("xmlns:"+prefix, n.added[prefix])
 	}
-	end := source.metadataStartEnd
-	selfClosing := data[end-2] == '/'
-	if selfClosing && generatedLength != 0 {
-		// Generated children follow the original self-closing metadata tag.
-		return bytes.Join([][]byte{
-			data[:end-2], declarations.Bytes(), []byte(">"),
-			data[end : end+generatedLength], []byte("</" + source.metadataName + ">"), data[end+generatedLength:],
-		}, nil), nil
-	}
-	if declarations.Len() == 0 {
-		return data, nil
-	}
-	insert := end - 1
-	if selfClosing {
-		insert--
-	}
-	return bytes.Join([][]byte{data[:insert], declarations.Bytes(), data[insert:]}, nil), nil
 }

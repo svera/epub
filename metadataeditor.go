@@ -1,18 +1,19 @@
 package epub
 
 import (
-	"bytes"
 	"encoding/xml"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/beevik/etree"
 )
 
 // metadataEditor holds edit state, not another representation of the metadata.
 type metadataEditor struct {
 	source               *packageEditState
 	removed              []bool
-	elements             []xml.Token
+	elements             []metadataElement
 	epub3                bool
 	preservedRefinements map[string]bool
 }
@@ -45,8 +46,9 @@ func (e *metadataEditor) newID() string {
 }
 
 func (e *metadataEditor) addElement(space, name, value string, attrs ...xml.Attr) {
-	start := xml.StartElement{Name: xml.Name{Space: space, Local: name}, Attr: attrs}
-	e.elements = append(e.elements, start, xml.CharData(value), start.End())
+	e.elements = append(e.elements, metadataElement{
+		name: xml.Name{Space: space, Local: name}, value: value, attributes: attrs,
+	})
 }
 
 func attr(name, value string) xml.Attr {
@@ -379,28 +381,33 @@ func (e *metadataEditor) removeRefinements() {
 	}
 }
 
-func (e *metadataEditor) apply(data []byte, namespaces *xmlNamespaces) ([]byte, error) {
-	generated, err := encodeMetadata(e.elements, namespaces)
+func (e *metadataEditor) apply(namespaces *xmlNamespaces) ([]byte, error) {
+	generated, err := buildMetadata(e.elements, namespaces)
 	if err != nil {
 		return nil, err
 	}
-	var result bytes.Buffer
-	offset := 0
-	inserted := false
-	for i, c := range e.source.children {
+	metadata := e.source.metadata
+	insertAt := len(metadata.Child)
+	for i, child := range e.source.children {
 		if e.removed[i] {
-			result.Write(data[offset:c.start])
-			if !inserted {
-				result.Write(generated)
-				inserted = true
-			}
-			offset = c.end
+			insertAt = child.element.Index()
+			break
 		}
 	}
-	result.Write(data[offset:e.source.end])
-	if !inserted {
-		result.Write(generated)
+	for i, element := range generated {
+		metadata.InsertChildAt(insertAt+i, element)
 	}
-	result.Write(data[e.source.end:])
-	return namespaces.declare(result.Bytes(), e.source, len(generated))
+	for i, child := range e.source.children {
+		if e.removed[i] {
+			metadata.RemoveChild(child.element)
+		}
+	}
+	namespaces.declare(metadata)
+	// etree serializes UTF-8 even when the original document used another encoding.
+	for _, token := range e.source.document.Child {
+		if instruction, ok := token.(*etree.ProcInst); ok && instruction.Target == "xml" {
+			instruction.Inst = xmlEncoding.ReplaceAllString(instruction.Inst, `encoding="UTF-8"`)
+		}
+	}
+	return e.source.document.WriteToBytes()
 }

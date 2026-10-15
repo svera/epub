@@ -56,11 +56,15 @@ func TestPrefixUpdatePreservesXML(t *testing.T) {
 		`<package xmlns="http://www.idpf.org/2007/opf" version="3.0" custom="prefix='not-an-attribute'"><metadata/></package>`,
 		`<opf:package xmlns:opf="http://www.idpf.org/2007/opf" version="3.0" prefix='old: urn:old'><opf:metadata/></opf:package>`,
 	} {
-		p, err := newPackageDocument(strings.NewReader(pkg))
+		source, err := parsePackageXML([]byte(pkg))
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := updatePackagePrefixes([]byte(pkg), p, map[string]string{"cdr": "urn:cdr"})
+		_, err = updatePackagePrefixes(source.document.Root(), map[string]string{"cdr": "urn:cdr"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := source.document.WriteToBytes()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -72,7 +76,7 @@ func TestPrefixUpdatePreservesXML(t *testing.T) {
 			!bytes.HasSuffix(result, []byte(pkg[strings.Index(pkg, ">")+1:])) {
 			t.Fatalf("prefix update changed package content: %s", result)
 		}
-		if strings.Contains(pkg, `custom=`) && !bytes.Contains(result, []byte(`custom="prefix='not-an-attribute'"`)) {
+		if strings.Contains(pkg, `custom=`) && source.document.Root().SelectAttrValue("custom", "") != "prefix='not-an-attribute'" {
 			t.Fatal("attribute contents were mistaken for a prefix declaration")
 		}
 	}

@@ -134,10 +134,16 @@ func TestNamespaceDeclarationsPreserveXML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := strings.Replace(pkg, `<metadata custom='a > b'>`,
-		`<metadata custom='a > b' xmlns:chosen="urn:custom" xmlns:other="urn:other?a=1&amp;b=2">`, 1)
-	if string(out) != expected {
-		t.Fatalf("namespace-only update changed unrelated XML:\n%s", out)
+	source, err := parsePackageXML(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.metadata.SelectAttrValue("custom", "") != "a > b" ||
+		source.metadata.SelectAttrValue("xmlns:chosen", "") != "urn:custom" ||
+		source.metadata.SelectAttrValue("xmlns:other", "") != "urn:other?a=1&b=2" ||
+		!bytes.Contains(out, []byte(`<meta name="keep" content="unchanged"/>`)) ||
+		!bytes.Contains(out, []byte(`<manifest/>`)) {
+		t.Fatalf("namespace-only update changed unrelated content:\n%s", out)
 	}
 	update.Creator = []Author{{
 		FullName: "Author", Attributes: []xml.Attr{{Name: xml.Name{Space: "urn:custom", Local: "id"}, Value: "ID"}},

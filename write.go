@@ -8,14 +8,20 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/beevik/etree"
+	"golang.org/x/net/html/charset"
 )
 
 const (
 	dcNamespace  = "http://purl.org/dc/elements/1.1/"
 	opfNamespace = "http://www.idpf.org/2007/opf"
 )
+
+var xmlEncoding = regexp.MustCompile(`\bencoding\s*=\s*("[^"]*"|'[^']*')`)
 
 // WriteMetadataToFile applies updates to the default rendition of an EPUB.
 // Nil slices leave fields unchanged; non-nil empty slices clear fields.
@@ -27,7 +33,9 @@ const (
 // Meta replaces legacy name/content metadata except Calibre series entries.
 // Refinements automatically target each value's XML ID and require EPUB 3.
 // Attributes writes custom XML attributes directly in either EPUB version.
-// Other metadata, package content, and ZIP entries are preserved. The original
+// Other XML content and namespace prefixes are preserved, but serialization
+// may change quoting, escaping, and empty-element formatting. Other ZIP entries
+// are copied unchanged. The original
 // file is replaced by a completed temporary archive in the same directory.
 // Existing Epub readers must be reopened to see the changes.
 // Symbolic links are rejected rather than replaced.
@@ -126,8 +134,8 @@ func WriteMetadataToFile(path string, updates *Information, clearFields ...strin
 }
 
 type metadataChild struct {
+	element    *etree.Element
 	attributes []xml.Attr
-	start, end int
 	name       xml.Name
 	id         string
 	refines    string
@@ -137,12 +145,11 @@ type metadataChild struct {
 }
 
 type packageEditState struct {
-	children         []metadataChild
-	end              int
-	ids              map[string]bool
-	metadataStartEnd int
-	metadataName     string
-	namespaces       map[string]string
+	document   *etree.Document
+	metadata   *etree.Element
+	children   []metadataChild
+	ids        map[string]bool
+	namespaces map[string]string
 }
 
 func (p *packageEditState) addID(id string) error {
@@ -153,106 +160,95 @@ func (p *packageEditState) addID(id string) error {
 	return nil
 }
 
-// Byte offsets let us retain XML that the public package structs do not model,
-// including vendor extensions, namespace declarations, and EPUB 2 guides.
-func scanPackageXML(data []byte) (*packageEditState, error) {
-	d := xml.NewDecoder(bytes.NewReader(data))
-	d.Entity = xml.HTMLEntity
-	p := &packageEditState{ids: make(map[string]bool), namespaces: make(map[string]string)}
-	depth, metadataDepth, end := 0, 0, -1
-	for {
-		start := int(d.InputOffset())
-		token, err := d.Token()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		switch t := token.(type) {
-		case xml.StartElement:
-			depth++
-			if depth == 1 || depth == 2 && t.Name == (xml.Name{Space: opfNamespace, Local: "metadata"}) {
-				for _, a := range t.Attr {
-					if a.Name.Space == "xmlns" {
-						p.namespaces[a.Name.Local] = a.Value
-					} else if a.Name == (xml.Name{Local: "xmlns"}) {
-						p.namespaces[""] = a.Value
-					}
-				}
+func parsePackageXML(data []byte) (*packageEditState, error) {
+	doc := etree.NewDocument()
+	doc.ReadSettings.Entity = xml.HTMLEntity
+	doc.ReadSettings.CharsetReader = charset.NewReaderLabel
+	doc.ReadSettings.PreserveCData = true
+	doc.ReadSettings.PreserveDuplicateAttrs = true
+	if err := doc.ReadFromBytes(data); err != nil {
+		return nil, err
+	}
+	root := doc.Root()
+	if root == nil || root.Tag != "package" || root.NamespaceURI() != opfNamespace {
+		return nil, fmt.Errorf("invalid package root")
+	}
+	p := &packageEditState{document: doc, ids: make(map[string]bool), namespaces: make(map[string]string)}
+	for _, element := range root.ChildElements() {
+		if element.Tag == "metadata" && element.NamespaceURI() == opfNamespace {
+			if p.metadata != nil {
+				return nil, fmt.Errorf("multiple metadata elements")
 			}
-			for _, a := range t.Attr {
-				if a.Name == (xml.Name{Local: "id"}) {
-					if err := p.addID(a.Value); err != nil {
-						return nil, err
-					}
-				}
-			}
-			if depth == 2 && t.Name == (xml.Name{Space: opfNamespace, Local: "metadata"}) {
-				if metadataDepth != 0 {
-					return nil, fmt.Errorf("multiple metadata elements")
-				}
-				metadataDepth = depth
-				p.metadataStartEnd = int(d.InputOffset())
-				tag := data[start:p.metadataStartEnd]
-				p.metadataName = strings.Fields(string(tag[1:]))[0]
-				p.metadataName = strings.TrimRight(p.metadataName, "/>")
-			} else if metadataDepth != 0 && depth == metadataDepth+1 && end == -1 {
-				child := metadataChild{start: start, name: t.Name, attributes: append([]xml.Attr(nil), t.Attr...)}
-				for _, a := range t.Attr {
-					if a.Name.Space != "" {
-						continue
-					}
-					switch a.Name.Local {
-					case "id":
-						child.id = a.Value
-					case "refines":
-						child.refines = a.Value
-					case "property":
-						child.property = a.Value
-					case "name":
-						child.legacyName = a.Value
-					}
-				}
-				p.children = append(p.children, child)
-			}
-		case xml.EndElement:
-			if metadataDepth != 0 && end == -1 {
-				if depth == metadataDepth+1 {
-					p.children[len(p.children)-1].end = int(d.InputOffset())
-				} else if depth == metadataDepth {
-					end = start
-				}
-			}
-			depth--
+			p.metadata = element
 		}
 	}
-	if end < 0 {
+	if p.metadata == nil {
 		return nil, fmt.Errorf("package has no metadata element")
 	}
-	p.end = end
+	for _, element := range []*etree.Element{root, p.metadata} {
+		for _, a := range element.Attr {
+			if a.Space == "xmlns" {
+				p.namespaces[a.Key] = a.Value
+			} else if a.Space == "" && a.Key == "xmlns" {
+				p.namespaces[""] = a.Value
+			}
+		}
+	}
+	var collectIDs func(*etree.Element) error
+	collectIDs = func(element *etree.Element) error {
+		for _, a := range element.Attr {
+			if a.Space == "" && a.Key == "id" {
+				if err := p.addID(a.Value); err != nil {
+					return err
+				}
+			}
+		}
+		for _, child := range element.ChildElements() {
+			if err := collectIDs(child); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := collectIDs(root); err != nil {
+		return nil, err
+	}
+	for _, element := range p.metadata.ChildElements() {
+		child := metadataChild{
+			element: element, name: xml.Name{Space: element.NamespaceURI(), Local: element.Tag},
+			id: element.SelectAttrValue("id", ""), refines: element.SelectAttrValue("refines", ""),
+			property: element.SelectAttrValue("property", ""), legacyName: element.SelectAttrValue("name", ""),
+		}
+		for _, a := range element.Attr {
+			if a.Space == "xmlns" || a.Space == "" && a.Key == "xmlns" {
+				continue
+			}
+			space := a.NamespaceURI()
+			if a.Space == "xml" {
+				space = xmlNamespace
+			}
+			child.attributes = append(child.attributes, xml.Attr{Name: xml.Name{Space: space, Local: a.Key}, Value: a.Value})
+		}
+		p.children = append(p.children, child)
+	}
 	return p, nil
 }
 
-func encodeMetadata(tokens []xml.Token, namespaces *xmlNamespaces) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := xml.NewEncoder(&buf)
-	// addElement always emits a start, text, and matching end token.
-	for i := 0; i < len(tokens); i += 3 {
-		if i+2 >= len(tokens) {
-			return nil, fmt.Errorf("incomplete metadata element")
-		}
-		start, startOK := tokens[i].(xml.StartElement)
-		value, valueOK := tokens[i+1].(xml.CharData)
-		end, endOK := tokens[i+2].(xml.EndElement)
-		if !startOK || !valueOK || !endOK || end.Name != start.Name {
-			return nil, fmt.Errorf("invalid metadata element token sequence")
-		}
-		if !validXMLText(string(value)) {
+type metadataElement struct {
+	name       xml.Name
+	value      string
+	attributes []xml.Attr
+}
+
+func buildMetadata(elements []metadataElement, namespaces *xmlNamespaces) ([]*etree.Element, error) {
+	var result []*etree.Element
+	for _, value := range elements {
+		if !validXMLText(value.value) {
 			return nil, fmt.Errorf("invalid XML text in metadata")
 		}
+		element := etree.NewElement(namespaces.name(value.name, false).Local)
 		seen := make(map[xml.Name]bool)
-		for _, a := range start.Attr {
+		for _, a := range value.attributes {
 			if !vocabularyPrefix.MatchString(a.Name.Local) || a.Name.Local == "xmlns" ||
 				a.Name.Space == "xmlns" || a.Name.Space == "http://www.w3.org/2000/xmlns/" {
 				return nil, fmt.Errorf("invalid metadata attribute name %q", a.Name.Local)
@@ -262,24 +258,14 @@ func encodeMetadata(tokens []xml.Token, namespaces *xmlNamespaces) ([]byte, erro
 			}
 			seen[a.Name] = true
 			if !validXMLText(a.Value) || !validXMLText(a.Name.Space) {
-				return nil, fmt.Errorf("invalid XML text in %s attribute %s", start.Name.Local, a.Name.Local)
+				return nil, fmt.Errorf("invalid XML text in %s attribute %s", value.name.Local, a.Name.Local)
 			}
+			element.CreateAttr(namespaces.name(a.Name, true).Local, a.Value)
 		}
-		start.Name = namespaces.name(start.Name, false)
-		start.Attr = append([]xml.Attr(nil), start.Attr...)
-		for j := range start.Attr {
-			start.Attr[j].Name = namespaces.name(start.Attr[j].Name, true)
-		}
-		for _, token := range []xml.Token{start, value, start.End()} {
-			if err := enc.EncodeToken(token); err != nil {
-				return nil, err
-			}
-		}
+		element.SetText(value.value)
+		result = append(result, element)
 	}
-	if err := enc.Flush(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return result, nil
 }
 
 func updatePackageMetadata(data []byte, u *Information, clear map[string]bool) ([]byte, error) {
@@ -287,13 +273,11 @@ func updatePackageMetadata(data []byte, u *Information, clear map[string]bool) (
 	if err != nil {
 		return nil, err
 	}
-	withPrefixes, err := updatePackagePrefixes(data, pkg, u.Prefixes)
+	source, err := parsePackageXML(data)
 	if err != nil {
 		return nil, err
 	}
-	prefixesChanged := !bytes.Equal(data, withPrefixes)
-	data = withPrefixes
-	source, err := scanPackageXML(data)
+	prefixesChanged, err := updatePackagePrefixes(source.document.Root(), u.Prefixes)
 	if err != nil {
 		return nil, err
 	}
@@ -325,11 +309,11 @@ func updatePackageMetadata(data []byte, u *Information, clear map[string]bool) (
 	}
 	editor.refreshModifiedTime(prefixesChanged || len(namespaces.added) != 0)
 	editor.removeRefinements()
-	updated, err := editor.apply(data, namespaces)
+	updated, err := editor.apply(namespaces)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := scanPackageXML(updated); err != nil {
+	if _, err := parsePackageXML(updated); err != nil {
 		return nil, fmt.Errorf("invalid updated package: %w", err)
 	}
 	p, err := newPackageDocument(bytes.NewReader(updated))

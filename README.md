@@ -13,9 +13,11 @@
 - **Resource Access**: Walk through EPUB files, publication resources, and reading content
 - **EPUB 2 & 3.2 Compatible**: Works with both legacy and modern EPUB formats
 - **Series Support**: Extract series information from Calibre and EPUB3 metadata
-- **Metadata Writing**: Apply partial updates without rewriting unrelated package XML or publication resources
+- **Metadata Writing**: Apply partial updates while retaining unrelated XML content and publication resources
 
 ## Installation
+
+Requires Go 1.23 or later.
 
 ```bash
 go get github.com/pirmd/epub
@@ -218,8 +220,9 @@ as `id` and `opf:role`. Custom attributes may not pass EPUB validation or be
 interpreted by other readers. Old `epub:refinement` wrappers are ordinary `Meta`
 entries; exclude them when writing `Meta` to remove them.
 
-The writer copies other ZIP entries without recompression, preserves package XML
-outside the updated metadata, and replaces the original file only after completing
+The writer uses etree to preserve XML content, comments, and namespace prefixes;
+quoting, escaping, and empty-tag formatting may change. Other ZIP entries are
+copied without recompression. The original file is replaced only after completing
 the new archive. File permissions are retained. Symbolic links are rejected.
 Reopen any existing `Epub` readers to observe updates. As with any metadata edit,
 digital signatures covering the package document will no longer be valid.
