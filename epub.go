@@ -1,4 +1,4 @@
-// Package epub provides a way to retrieve stored metadata from epub files.
+// Package epub provides a way to read and update metadata in EPUB files.
 package epub
 
 import (
@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// Epub represents a read-only EPUB document.
+// Epub represents an EPUB reader. Use WriteMetadataToFile to update metadata.
 type Epub struct {
 	*zip.ReadCloser
 

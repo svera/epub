@@ -214,22 +214,15 @@ func getTitles(elt []Element, meta []MetaLegacy) (title []string, subtitle []str
 // If both are available, EPUB3 is preferred.
 func getSeries(meta []MetaLegacy) (series string, seriesIndex string) {
 	// First, look for EPUB3 collection metadata (priority)
-	for _, m := range meta {
-		if m.Property == "belongs-to-collection" {
-			series = m.Value
-
-			// Look for group-position that refines this collection
-			for _, mm := range meta {
-				if mm.Refines == "#"+m.ID && mm.Property == "group-position" {
-					seriesIndex = mm.Value
-					break
-				}
-			}
-			// If we found series info via EPUB3, return immediately
-			if series != "" {
-				return series, seriesIndex
+	if m := seriesCollection(meta); m != nil {
+		series = m.Value
+		for _, mm := range meta {
+			if mm.Meta != nil && mm.Refines == "#"+m.ID && mm.Property == "group-position" {
+				seriesIndex = mm.Value
+				break
 			}
 		}
+		return series, seriesIndex
 	}
 
 	// Fall back to Calibre-style metadata
@@ -243,4 +236,24 @@ func getSeries(meta []MetaLegacy) (series string, seriesIndex string) {
 	}
 
 	return series, seriesIndex
+}
+
+func seriesCollection(meta []MetaLegacy) *Meta {
+	for _, m := range meta {
+		if m.Meta == nil || m.Property != "belongs-to-collection" || m.Value == "" {
+			continue
+		}
+		isSeries := true
+		for _, refinement := range meta {
+			if refinement.Meta != nil && refinement.Refines == "#"+m.ID &&
+				refinement.Property == "collection-type" && refinement.Value != "series" {
+				isSeries = false
+				break
+			}
+		}
+		if isSeries {
+			return m.Meta
+		}
+	}
+	return nil
 }

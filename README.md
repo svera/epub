@@ -4,7 +4,7 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/pirmd/epub)](https://goreportcard.com/report/github.com/pirmd/epub)
 [![License](https://img.shields.io/badge/license-BSD-blue.svg)](LICENSE)
 
-`epub` is a Go package for reading metadata from EPUB files. It provides comprehensive support for both EPUB 2 and EPUB 3.2 specifications.
+`epub` is a Go package for reading and updating metadata in EPUB files. It provides comprehensive support for both EPUB 2 and EPUB 3.2 specifications.
 
 ## Features
 
@@ -13,6 +13,7 @@
 - **Resource Access**: Walk through EPUB files, publication resources, and reading content
 - **EPUB 2 & 3.2 Compatible**: Works with both legacy and modern EPUB formats
 - **Series Support**: Extract series information from Calibre and EPUB3 metadata
+- **Metadata Writing**: Apply partial updates without rewriting unrelated package XML or publication resources
 
 ## Installation
 
@@ -51,6 +52,42 @@ func main() {
     }
 }
 ```
+
+### Writing Metadata
+
+Use `WriteMetadataToFile` with a `MetadataUpdate` to change metadata in place:
+
+```go
+series := "My Series"
+err := epub.WriteMetadataToFile("book.epub", &epub.MetadataUpdate{
+    Title: []string{"A New Title"},
+    Creator: []epub.Author{
+        {FullName: "Jane Doe", FileAs: "Doe, Jane", Role: "aut"},
+    },
+    Subject: []string{}, // Clear subjects.
+    Series: &series,
+})
+if err != nil {
+    panic(err)
+}
+```
+
+Omitted (`nil`) slices and pointers preserve existing fields. Empty, non-nil
+slices clear fields; pointers to empty strings clear `Series` or `SeriesIndex`.
+Title and subtitle updates are independent. Replacing a field also replaces its
+associated refinements. `Meta` replaces legacy name/content metadata except
+Calibre series entries; use `Series` and `SeriesIndex` to update those. Series
+updates use Calibre metadata for EPUB 2 and collection metadata for EPUB 3.
+EPUB 3 updates refresh the `dcterms:modified` timestamp.
+Collections explicitly typed as something other than a series are preserved
+and are not reported as series metadata.
+The primary identifier cannot be removed, since the package references it.
+
+The writer copies other ZIP entries without recompression, preserves package XML
+outside the updated metadata, and replaces the original file only after completing
+the new archive. File permissions are retained. Symbolic links are rejected.
+Reopen any existing `Epub` readers to observe updates. As with any metadata edit,
+digital signatures covering the package document will no longer be valid.
 
 ### Access Package Document
 
@@ -159,7 +196,8 @@ func main() {
 
 ## Command Line Tool
 
-A simple command-line tool is available to print EPUB metadata in JSON format.
+A command-line tool is available to print EPUB metadata in JSON format and apply
+JSON metadata updates.
 
 ### Installation
 
@@ -185,7 +223,18 @@ epub --field author,language mybook.epub
 
 # Process multiple files
 epub file1.epub file2.epub
+
+# Update metadata in place and print the result
+epub --write metadata.json mybook.epub
+
+# Read updates from stdin; omitted fields stay unchanged, [] clears a list
+printf '%s' '{"Title":["New Title"],"Subject":[],"Series":""}' | epub --write - mybook.epub
 ```
+
+The JSON update object accepts the same field names as `MetadataUpdate`.
+`null` leaves a field unchanged. Unknown fields and invalid JSON are rejected
+before any EPUB is modified. One update can be applied to multiple input files;
+each file is replaced independently, and a failure results in a nonzero exit code.
 
 ### Example Output
 
