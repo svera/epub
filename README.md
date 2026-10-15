@@ -12,6 +12,7 @@
 - **Package Document Parsing**: Full support for EPUB OPF (Open Packaging Format) files
 - **Resource Access**: Walk through EPUB files, publication resources, and reading content
 - **EPUB 2 & 3.2 Compatible**: Works with both legacy and modern EPUB formats
+- **Series Support**: Extract series information from Calibre and EPUB3 metadata
 - **Metadata Writing**: Apply partial updates without rewriting unrelated package XML or publication resources
 
 ## Installation
