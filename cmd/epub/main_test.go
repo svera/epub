@@ -18,7 +18,7 @@ func TestReadMetadataUpdate(t *testing.T) {
 	}
 	if len(update.Title) != 1 || update.Title[0] != "New" ||
 		update.Subject == nil || len(update.Subject) != 0 ||
-		update.Series == nil || *update.Series != "" || update.Creator != nil {
+		update.Series != "" || update.Creator != nil {
 		t.Fatalf("incorrect partial update: %+v", update)
 	}
 	for _, input := range []string{
@@ -57,7 +57,7 @@ func TestCLIWrite(t *testing.T) {
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
-	for _, mode := range []string{"file", "stdin", "invalid", "multiple", "missing"} {
+	for _, mode := range []string{"file", "stdin", "invalid", "multiple", "missing", "clear", "invalid clear", "clear without write"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "book.epub")
@@ -76,6 +76,32 @@ func TestCLIWrite(t *testing.T) {
 				out, err = run("", "--write", jsonPath, "--field", "title", path)
 			case "stdin":
 				out, err = run(update, "--write", "-", "--field", "title", path)
+			case "clear":
+				if err := epub.WriteMetadataToFile(path, &epub.Information{Series: "Series", SeriesIndex: "3"}); err != nil {
+					t.Fatal(err)
+				}
+				out, err = run(update, "--write", "-", "--clear", "Series", "--field", "title", path)
+				info, readErr := epub.GetMetadataFromFile(path)
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				if info.Series != "" || info.SeriesIndex != "" {
+					t.Fatalf("CLI did not clear series: %+v", info)
+				}
+			case "invalid clear", "clear without write":
+				args := []string{"--clear", "Series", path}
+				if mode == "invalid clear" {
+					args = []string{"--write", "-", "--clear", "Unknown", path}
+				}
+				out, err = run(update, args...)
+				if err == nil || !strings.Contains(out, "Error:") {
+					t.Fatalf("invalid clear options accepted: %v\n%s", err, out)
+				}
+				after, readErr := os.ReadFile(path)
+				if readErr != nil || string(after) != string(source) {
+					t.Fatalf("invalid clear options modified original: %v", readErr)
+				}
+				return
 			case "invalid":
 				out, err = run(`{"Unknown":[]}`, "--write", "-", path)
 				if err == nil || !strings.Contains(out, "unknown field") {

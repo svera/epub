@@ -18,41 +18,27 @@ const (
 	opfNamespace = "http://www.idpf.org/2007/opf"
 )
 
-// MetadataUpdate describes a partial update to an EPUB's metadata.
-// Nil slices and pointers leave fields unchanged; empty, non-nil slices remove
-// fields. Series and SeriesIndex can be cleared with pointers to empty strings.
-// Meta updates legacy name/content metadata, excluding Calibre series fields,
-// which are controlled by Series and SeriesIndex.
-type MetadataUpdate struct {
-	Identifier  []Identifier
-	Title       []string
-	SubTitle    []string
-	Language    []string
-	Contributor []Author
-	Coverage    []string
-	Creator     []Author
-	Date        []Date
-	Description []string
-	Format      []string
-	Publisher   []string
-	Relation    []string
-	Rights      []string
-	Source      []string
-	Subject     []string
-	Type        []string
-	Meta        []GenericMetadata
-	Series      *string
-	SeriesIndex *string
-}
-
 // WriteMetadataToFile applies updates to the default rendition of an EPUB.
+// Nil slices and empty strings leave fields unchanged; non-nil empty slices
+// clear fields. clearFields accepts "Series" and "SeriesIndex" to explicitly
+// clear those string fields, overriding any supplied values.
+// Meta replaces legacy name/content metadata except Calibre series entries.
 // Other metadata, package content, and ZIP entries are preserved. The original
 // file is replaced by a completed temporary archive in the same directory.
 // Existing Epub readers must be reopened to see the changes.
 // Symbolic links are rejected rather than replaced.
-func WriteMetadataToFile(path string, updates *MetadataUpdate) (err error) {
+func WriteMetadataToFile(path string, updates *Information, clearFields ...string) (err error) {
 	if updates == nil {
 		return fmt.Errorf("metadata updates must not be nil")
+	}
+	clear := make(map[string]bool)
+	for _, field := range clearFields {
+		switch field {
+		case "Series", "SeriesIndex":
+			clear[field] = true
+		default:
+			return fmt.Errorf("unsupported clear field %q: use Series or SeriesIndex; clear list fields with empty slices", field)
+		}
 	}
 	stat, err := os.Lstat(path)
 	if err != nil {
@@ -79,7 +65,7 @@ func WriteMetadataToFile(path string, updates *MetadataUpdate) (err error) {
 	if closeErr != nil {
 		return closeErr
 	}
-	data, err = updatePackageMetadata(data, updates)
+	data, err = updatePackageMetadata(data, updates, clear)
 	if err != nil {
 		return fmt.Errorf("update package metadata: %w", err)
 	}
@@ -217,27 +203,33 @@ func scanPackageXML(data []byte) (*packageXML, error) {
 	return p, nil
 }
 
-type metadataElement struct {
-	XMLName xml.Name
-	Attrs   []xml.Attr `xml:",any,attr"`
-	Value   string     `xml:",chardata"`
-}
-
-func encodeMetadata(elements []metadataElement) ([]byte, error) {
-	for _, element := range elements {
-		if !validXMLText(element.Value) {
-			return nil, fmt.Errorf("invalid XML text in %s", element.XMLName.Local)
-		}
-		for _, a := range element.Attrs {
-			if !validXMLText(a.Value) {
-				return nil, fmt.Errorf("invalid XML text in %s attribute %s", element.XMLName.Local, a.Name.Local)
+func encodeMetadata(tokens []xml.Token) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := xml.NewEncoder(&buf)
+	for _, token := range tokens {
+		switch t := token.(type) {
+		case xml.CharData:
+			if !validXMLText(string(t)) {
+				return nil, fmt.Errorf("invalid XML text in metadata")
+			}
+		case xml.StartElement:
+			for _, a := range t.Attr {
+				if !validXMLText(a.Value) {
+					return nil, fmt.Errorf("invalid XML text in %s attribute %s", t.Name.Local, a.Name.Local)
+				}
 			}
 		}
+		if err := enc.EncodeToken(token); err != nil {
+			return nil, err
+		}
 	}
-	return xml.Marshal(elements)
+	if err := enc.Flush(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
-func updatePackageMetadata(data []byte, u *MetadataUpdate) ([]byte, error) {
+func updatePackageMetadata(data []byte, u *Information, clear map[string]bool) ([]byte, error) {
 	pkg, err := newPackageDocument(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
@@ -247,58 +239,112 @@ func updatePackageMetadata(data []byte, u *MetadataUpdate) ([]byte, error) {
 		return nil, err
 	}
 	children := source.children
-	epub3 := strings.HasPrefix(pkg.Version, "3")
+	markSubtitles(children, pkg.Metadata.Meta)
+	editor := metadataEditor{
+		source: source, removed: make([]bool, len(children)),
+		epub3: strings.HasPrefix(pkg.Version, "3"),
+	}
+	editor.updateTextFields(u)
+	editor.updateIdentifiers(u.Identifier, pkg.UniqueIdentifier)
+	editor.updateAuthors("creator", u.Creator)
+	editor.updateAuthors("contributor", u.Contributor)
+	editor.updateDates(u.Date)
+	editor.updateLegacyMetadata(u.Meta)
+	if err := editor.updateSeries(u, clear, pkg.Metadata.Meta); err != nil {
+		return nil, err
+	}
+	editor.refreshModifiedTime()
+	editor.removeRefinements()
+	updated, err := editor.apply(data)
+	if err != nil {
+		return nil, err
+	}
+	p, err := newPackageDocument(bytes.NewReader(updated))
+	if err != nil {
+		return nil, fmt.Errorf("invalid updated package: %w", err)
+	}
+	if u.Identifier != nil && p.UniqueIdentifier != "" {
+		for _, id := range p.Metadata.Identifier {
+			if id.ID == p.UniqueIdentifier {
+				return updated, nil
+			}
+		}
+		return nil, fmt.Errorf("cannot remove the package's primary identifier")
+	}
+	return updated, nil
+}
+
+func markSubtitles(children []metadataChild, meta []MetaLegacy) {
 	for i := range children {
 		c := &children[i]
 		if c.name.Space != dcNamespace || c.name.Local != "title" || c.id == "" {
 			continue
 		}
-		for _, m := range pkg.Metadata.Meta {
+		for _, m := range meta {
 			if m.Meta != nil && m.Refines == "#"+c.id && m.Property == "title-type" && m.Value == "subtitle" {
 				c.subtitle = true
 			}
 		}
 	}
+}
 
-	removed := make([]bool, len(children))
-	newID := func() string {
-		for i := 1; ; i++ {
-			id := fmt.Sprintf("epub-metadata-%d", i)
-			if !source.ids[id] {
-				source.ids[id] = true
-				return id
-			}
+// metadataEditor holds edit state, not another representation of the metadata.
+type metadataEditor struct {
+	source   *packageXML
+	removed  []bool
+	elements []xml.Token
+	epub3    bool
+}
+
+func (e *metadataEditor) newID() string {
+	for i := 1; ; i++ {
+		id := fmt.Sprintf("epub-metadata-%d", i)
+		if !e.source.ids[id] {
+			e.source.ids[id] = true
+			return id
 		}
 	}
-	var elements []metadataElement
-	addElement := func(space, name, value string, attrs ...xml.Attr) {
-		elements = append(elements, metadataElement{
-			XMLName: xml.Name{Space: space, Local: name}, Attrs: attrs, Value: value,
-		})
+}
+
+func (e *metadataEditor) addElement(space, name, value string, attrs ...xml.Attr) {
+	start := xml.StartElement{Name: xml.Name{Space: space, Local: name}, Attr: attrs}
+	e.elements = append(e.elements, start, xml.CharData(value), start.End())
+}
+
+func attr(name, value string) xml.Attr {
+	return xml.Attr{Name: xml.Name{Local: name}, Value: value}
+}
+
+func (e *metadataEditor) addMeta(id, property, refines, value string) {
+	attrs := []xml.Attr{attr("property", property)}
+	if id != "" {
+		attrs = append(attrs, attr("id", id))
 	}
-	attr := func(name, value string) xml.Attr {
-		return xml.Attr{Name: xml.Name{Local: name}, Value: value}
+	if refines != "" {
+		attrs = append(attrs, attr("refines", "#"+refines))
 	}
-	addMeta := func(id, property, refines, value string) {
-		attrs := []xml.Attr{attr("property", property)}
-		if id != "" {
-			attrs = append(attrs, attr("id", id))
+	e.addElement(opfNamespace, "meta", value, attrs...)
+}
+
+func (e *metadataEditor) replace(name string, subtitle bool) []string {
+	var ids []string
+	for i, c := range e.source.children {
+		if c.name == (xml.Name{Space: dcNamespace, Local: name}) && (name != "title" || c.subtitle == subtitle) {
+			e.removed[i] = true
+			ids = append(ids, c.id)
 		}
-		if refines != "" {
-			attrs = append(attrs, attr("refines", "#"+refines))
-		}
-		addElement(opfNamespace, "meta", value, attrs...)
 	}
-	replace := func(name string, subtitle bool) []string {
-		var ids []string
-		for i, c := range children {
-			if c.name == (xml.Name{Space: dcNamespace, Local: name}) && (name != "title" || c.subtitle == subtitle) {
-				removed[i] = true
-				ids = append(ids, c.id)
-			}
-		}
-		return ids
+	return ids
+}
+
+func (e *metadataEditor) elementID(ids []string, i int) string {
+	if i < len(ids) && ids[i] != "" {
+		return ids[i]
 	}
+	return e.newID()
+}
+
+func (e *metadataEditor) updateTextFields(u *Information) {
 	type field struct {
 		name     string
 		values   []string
@@ -312,176 +358,198 @@ func updatePackageMetadata(data []byte, u *MetadataUpdate) ([]byte, error) {
 		{"rights", u.Rights, false}, {"source", u.Source, false},
 		{"subject", u.Subject, false}, {"type", u.Type, false},
 	}
-	elementID := func(ids []string, i int) string {
-		if i < len(ids) && ids[i] != "" {
-			return ids[i]
-		}
-		return newID()
-	}
 	for _, f := range fields {
 		if f.values == nil {
 			continue
 		}
-		ids := replace(f.name, f.subtitle)
+		ids := e.replace(f.name, f.subtitle)
 		for i, value := range f.values {
-			id := elementID(ids, i)
-			addElement(dcNamespace, f.name, value, attr("id", id))
+			id := e.elementID(ids, i)
+			e.addElement(dcNamespace, f.name, value, attr("id", id))
 			if f.subtitle {
-				addMeta("", "title-type", id, "subtitle")
+				e.addMeta("", "title-type", id, "subtitle")
 			}
 		}
 	}
-	if u.Identifier != nil {
-		ids := replace("identifier", false)
+}
+
+func (e *metadataEditor) updateIdentifiers(values []Identifier, primaryID string) {
+	if values != nil {
+		ids := e.replace("identifier", false)
 		// Keep the package's primary identifier reference valid even when
 		// the original primary identifier was not the first one.
 		for i, id := range ids {
-			if id == pkg.UniqueIdentifier {
+			if id == primaryID {
 				ids[0], ids[i] = ids[i], ids[0]
 				break
 			}
 		}
-		for i, value := range u.Identifier {
-			id := elementID(ids, i)
+		for i, value := range values {
+			id := e.elementID(ids, i)
 			attrs := []xml.Attr{attr("id", id)}
 			if value.Scheme != "" {
 				attrs = append(attrs, xml.Attr{Name: xml.Name{Space: opfNamespace, Local: "scheme"}, Value: value.Scheme})
 			}
-			addElement(dcNamespace, "identifier", value.Value, attrs...)
+			e.addElement(dcNamespace, "identifier", value.Value, attrs...)
 		}
 	}
-	for _, f := range []struct {
-		name   string
-		values []Author
-	}{{"creator", u.Creator}, {"contributor", u.Contributor}} {
-		if f.values == nil {
-			continue
-		}
-		ids := replace(f.name, false)
-		for i, a := range f.values {
-			id := elementID(ids, i)
-			attrs := []xml.Attr{attr("id", id)}
-			for _, v := range []struct{ name, value string }{{"role", a.Role}, {"file-as", a.FileAs}} {
-				if v.value == "" {
-					continue
-				}
-				if epub3 {
-					addMeta("", v.name, id, v.value)
-				} else {
-					attrs = append(attrs, xml.Attr{Name: xml.Name{Space: opfNamespace, Local: v.name}, Value: v.value})
-				}
+}
+
+func (e *metadataEditor) updateAuthors(name string, values []Author) {
+	if values == nil {
+		return
+	}
+	ids := e.replace(name, false)
+	for i, a := range values {
+		id := e.elementID(ids, i)
+		attrs := []xml.Attr{attr("id", id)}
+		for _, v := range []struct{ name, value string }{{"role", a.Role}, {"file-as", a.FileAs}} {
+			if v.value == "" {
+				continue
 			}
-			addElement(dcNamespace, f.name, a.FullName, attrs...)
+			if e.epub3 {
+				e.addMeta("", v.name, id, v.value)
+			} else {
+				attrs = append(attrs, xml.Attr{Name: xml.Name{Space: opfNamespace, Local: v.name}, Value: v.value})
+			}
 		}
+		e.addElement(dcNamespace, name, a.FullName, attrs...)
 	}
-	if u.Date != nil {
-		ids := replace("date", false)
-		for i, value := range u.Date {
-			attrs := []xml.Attr{attr("id", elementID(ids, i))}
+}
+
+func (e *metadataEditor) updateDates(values []Date) {
+	if values != nil {
+		ids := e.replace("date", false)
+		for i, value := range values {
+			attrs := []xml.Attr{attr("id", e.elementID(ids, i))}
 			if value.Event != "" {
 				attrs = append(attrs, xml.Attr{Name: xml.Name{Space: opfNamespace, Local: "event"}, Value: value.Event})
 			}
-			addElement(dcNamespace, "date", value.Stamp, attrs...)
+			e.addElement(dcNamespace, "date", value.Stamp, attrs...)
 		}
 	}
-	isSeries := func(name string) bool {
-		return name == "calibre:series" || name == "calibre:series_index"
-	}
-	if u.Meta != nil {
-		for i, c := range children {
+}
+
+func isSeries(name string) bool {
+	return name == "calibre:series" || name == "calibre:series_index"
+}
+
+func (e *metadataEditor) updateLegacyMetadata(values []GenericMetadata) {
+	if values != nil {
+		for i, c := range e.source.children {
 			if c.name == (xml.Name{Space: opfNamespace, Local: "meta"}) && c.legacyName != "" && !isSeries(c.legacyName) {
-				removed[i] = true
+				e.removed[i] = true
 			}
 		}
-		for _, value := range u.Meta {
+		for _, value := range values {
 			if isSeries(value.Name) {
 				continue
 			}
-			addElement(opfNamespace, "meta", "", attr("name", value.Name), attr("content", value.Content))
+			e.addElement(opfNamespace, "meta", "", attr("name", value.Name), attr("content", value.Content))
 		}
 	}
-	if u.Series != nil || u.SeriesIndex != nil {
-		series, index := getSeries(pkg.Metadata.Meta)
-		if u.Series != nil {
-			series = *u.Series
+}
+
+func (e *metadataEditor) updateSeries(u *Information, clear map[string]bool, meta []MetaLegacy) error {
+	if u.Series == "" && u.SeriesIndex == "" && !clear["Series"] && !clear["SeriesIndex"] {
+		return nil
+	}
+	series, index := getSeries(meta)
+	if u.Series != "" {
+		series = u.Series
+	}
+	if u.SeriesIndex != "" {
+		index = u.SeriesIndex
+	}
+	if clear["Series"] {
+		series, index = "", ""
+	}
+	if clear["SeriesIndex"] {
+		index = ""
+	}
+	if series == "" && index != "" {
+		return fmt.Errorf("series index requires a series name")
+	}
+	collectionID := ""
+	collectionFound := false
+	collection := seriesCollection(meta)
+	for i, c := range e.source.children {
+		if c.name != (xml.Name{Space: opfNamespace, Local: "meta"}) {
+			continue
 		}
-		if u.SeriesIndex != nil {
-			index = *u.SeriesIndex
+		if isSeries(c.legacyName) {
+			e.removed[i] = true
 		}
-		if series == "" && index != "" && u.Series == nil {
-			return nil, fmt.Errorf("series index requires a series name")
+		if collection != nil && c.property == "belongs-to-collection" && c.id == collection.ID && !collectionFound {
+			collectionFound = true
+			collectionID = c.id
+			e.removed[i] = true
 		}
-		collectionID := ""
-		collectionFound := false
-		collection := seriesCollection(pkg.Metadata.Meta)
-		for i, c := range children {
-			if c.name != (xml.Name{Space: opfNamespace, Local: "meta"}) {
-				continue
+	}
+	if e.epub3 {
+		if series != "" {
+			if collectionID == "" {
+				collectionID = e.newID()
 			}
-			if isSeries(c.legacyName) {
-				removed[i] = true
-			}
-			if collection != nil && c.property == "belongs-to-collection" && c.id == collection.ID && !collectionFound {
-				collectionFound = true
-				collectionID = c.id
-				removed[i] = true
+			e.addMeta(collectionID, "belongs-to-collection", "", series)
+			e.addMeta("", "collection-type", collectionID, "series")
+			if index != "" {
+				e.addMeta("", "group-position", collectionID, index)
 			}
 		}
-		if epub3 {
-			if series != "" {
-				if collectionID == "" {
-					collectionID = newID()
-				}
-				addMeta(collectionID, "belongs-to-collection", "", series)
-				addMeta("", "collection-type", collectionID, "series")
-				if index != "" {
-					addMeta("", "group-position", collectionID, index)
-				}
-			}
-		} else {
-			for _, v := range []struct{ name, value string }{{"calibre:series", series}, {"calibre:series_index", index}} {
-				if v.value != "" && (v.name != "calibre:series_index" || series != "") {
-					addElement(opfNamespace, "meta", "", attr("name", v.name), attr("content", v.value))
-				}
+	} else {
+		for _, v := range []struct{ name, value string }{{"calibre:series", series}, {"calibre:series_index", index}} {
+			if v.value != "" && (v.name != "calibre:series_index" || series != "") {
+				e.addElement(opfNamespace, "meta", "", attr("name", v.name), attr("content", v.value))
 			}
 		}
 	}
-	changed := len(elements) != 0
-	for _, remove := range removed {
+	return nil
+}
+
+func (e *metadataEditor) refreshModifiedTime() {
+	changed := len(e.elements) != 0
+	for _, remove := range e.removed {
 		changed = changed || remove
 	}
-	if changed && epub3 {
-		for i, c := range children {
+	if changed && e.epub3 {
+		for i, c := range e.source.children {
 			if c.name == (xml.Name{Space: opfNamespace, Local: "meta"}) && c.property == "dcterms:modified" && c.refines == "" {
-				removed[i] = true
+				e.removed[i] = true
 			}
 		}
-		addMeta("", "dcterms:modified", "", time.Now().UTC().Format("2006-01-02T15:04:05Z"))
+		e.addMeta("", "dcterms:modified", "", time.Now().UTC().Format("2006-01-02T15:04:05Z"))
 	}
+}
+
+func (e *metadataEditor) removeRefinements() {
 	// Remove refinements of replaced elements, including chained refinements.
 	for changed := true; changed; {
 		changed = false
-		for i, c := range children {
-			if removed[i] || c.refines == "" {
+		for i, c := range e.source.children {
+			if e.removed[i] || c.refines == "" {
 				continue
 			}
-			for j, target := range children {
-				if removed[j] && target.id != "" && c.refines == "#"+target.id {
-					removed[i], changed = true, true
+			for j, target := range e.source.children {
+				if e.removed[j] && target.id != "" && c.refines == "#"+target.id {
+					e.removed[i], changed = true, true
 					break
 				}
 			}
 		}
 	}
-	generated, err := encodeMetadata(elements)
+}
+
+func (e *metadataEditor) apply(data []byte) ([]byte, error) {
+	generated, err := encodeMetadata(e.elements)
 	if err != nil {
 		return nil, err
 	}
 	var result bytes.Buffer
 	offset := 0
 	inserted := false
-	for i, c := range children {
-		if removed[i] {
+	for i, c := range e.source.children {
+		if e.removed[i] {
 			result.Write(data[offset:c.start])
 			if !inserted {
 				result.Write(generated)
@@ -490,26 +558,12 @@ func updatePackageMetadata(data []byte, u *MetadataUpdate) ([]byte, error) {
 			offset = c.end
 		}
 	}
-	result.Write(data[offset:source.end])
+	result.Write(data[offset:e.source.end])
 	if !inserted {
 		result.Write(generated)
 	}
-	result.Write(data[source.end:])
-	updated := result.Bytes()
-	p, err := newPackageDocument(bytes.NewReader(updated))
-	if err != nil {
-		return nil, fmt.Errorf("invalid updated package: %w", err)
-	}
-	if u.Identifier != nil && p.UniqueIdentifier != "" {
-		found := false
-		for _, id := range p.Metadata.Identifier {
-			found = found || id.ID == p.UniqueIdentifier
-		}
-		if !found {
-			return nil, fmt.Errorf("cannot remove the package's primary identifier")
-		}
-	}
-	return updated, nil
+	result.Write(data[e.source.end:])
+	return result.Bytes(), nil
 }
 
 func validXMLText(s string) bool {

@@ -55,25 +55,35 @@ func main() {
 
 ### Writing Metadata
 
-Use `WriteMetadataToFile` with a `MetadataUpdate` to change metadata in place:
+Use `WriteMetadataToFile` with the existing `Information` type to change metadata in place:
 
 ```go
-series := "My Series"
-err := epub.WriteMetadataToFile("book.epub", &epub.MetadataUpdate{
+err := epub.WriteMetadataToFile("book.epub", &epub.Information{
     Title: []string{"A New Title"},
     Creator: []epub.Author{
         {FullName: "Jane Doe", FileAs: "Doe, Jane", Role: "aut"},
     },
     Subject: []string{}, // Clear subjects.
-    Series: &series,
+    Series: "My Series",
 })
 if err != nil {
     panic(err)
 }
 ```
 
-Omitted (`nil`) slices and pointers preserve existing fields. Empty, non-nil
-slices clear fields; pointers to empty strings clear `Series` or `SeriesIndex`.
+When marshaling updates to JSON, `Information`'s `omitempty` tags omit empty
+optional lists; include an explicit `[]` in JSON to clear those fields.
+
+Nil slices and empty series strings preserve existing fields. Empty, non-nil
+slices clear fields. To clear series strings, pass their names explicitly:
+
+```go
+err := epub.WriteMetadataToFile("book.epub", &epub.Information{}, "Series")
+```
+
+The clear list accepts `Series` and `SeriesIndex` and takes precedence over
+supplied values. Clearing `Series` also clears its index; clearing only
+`SeriesIndex` preserves the series name. Unknown clear fields are rejected.
 Title and subtitle updates are independent. Replacing a field also replaces its
 associated refinements. `Meta` replaces legacy name/content metadata except
 Calibre series entries; use `Series` and `SeriesIndex` to update those. Series
@@ -228,10 +238,10 @@ epub file1.epub file2.epub
 epub --write metadata.json mybook.epub
 
 # Read updates from stdin; omitted fields stay unchanged, [] clears a list
-printf '%s' '{"Title":["New Title"],"Subject":[],"Series":""}' | epub --write - mybook.epub
+printf '%s' '{"Title":["New Title"],"Subject":[]}' | epub --write - --clear Series mybook.epub
 ```
 
-The JSON update object accepts the same field names as `MetadataUpdate`.
+The JSON update object accepts the same field names as `Information`.
 `null` leaves a field unchanged. Unknown fields and invalid JSON are rejected
 before any EPUB is modified. One update can be applied to multiple input files;
 each file is replaced independently, and a failure results in a nonzero exit code.

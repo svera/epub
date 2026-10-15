@@ -13,10 +13,10 @@ import (
 	"github.com/pirmd/epub"
 )
 
-func readMetadataUpdate(r io.Reader) (*epub.MetadataUpdate, error) {
+func readMetadataUpdate(r io.Reader) (*epub.Information, error) {
 	decoder := json.NewDecoder(r)
 	decoder.DisallowUnknownFields()
-	var update *epub.MetadataUpdate
+	var update *epub.Information
 	if err := decoder.Decode(&update); err != nil {
 		return nil, err
 	}
@@ -121,6 +121,7 @@ func main() {
 		fields  string
 		help    bool
 		write   string
+		clear   string
 	)
 
 	flag.BoolVar(&pretty, "pretty", true, "Pretty-print JSON output")
@@ -128,6 +129,7 @@ func main() {
 	flag.StringVar(&fields, "field", "", "Print only specific field(s). Comma-separated list: title,author,language,identifier,publisher,date,description,series,etc.")
 	flag.BoolVar(&help, "help", false, "Print help and exit")
 	flag.StringVar(&write, "write", "", "Update metadata from a JSON file (use - for stdin); omitted fields are preserved")
+	flag.StringVar(&clear, "clear", "", "Clear Series and/or SeriesIndex (comma-separated); requires --write")
 
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [options] <epub files>\n\n", filepath.Base(os.Args[0]))
@@ -169,7 +171,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	var update *epub.MetadataUpdate
+	if clear != "" && write == "" {
+		fmt.Fprintln(os.Stderr, "Error: --clear requires --write")
+		os.Exit(1)
+	}
+	var clearFields []string
+	if clear != "" {
+		for _, field := range strings.Split(clear, ",") {
+			field = strings.TrimSpace(field)
+			if field != "Series" && field != "SeriesIndex" {
+				fmt.Fprintf(os.Stderr, "Error: unsupported clear field %q; use Series or SeriesIndex\n", field)
+				os.Exit(1)
+			}
+			clearFields = append(clearFields, field)
+		}
+	}
+	var update *epub.Information
 	if write != "" {
 		var err error
 		if write == "-" {
@@ -197,7 +214,7 @@ func main() {
 		}
 
 		if update != nil {
-			if err := epub.WriteMetadataToFile(arg, update); err != nil {
+			if err := epub.WriteMetadataToFile(arg, update, clearFields...); err != nil {
 				fmt.Fprintf(os.Stderr, "Error updating epub %s: %v\n", arg, err)
 				hasError = true
 				continue
