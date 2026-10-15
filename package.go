@@ -173,7 +173,7 @@ type Meta struct {
 	Scheme string `xml:"scheme,attr,omitempty"`
 	// Lang specifies the language used in the contents and attribute
 	// values of the carrying element and its descendants.
-	Lang string `xml:"xml:lang,attr,omitempty"`
+	Lang string `xml:"http://www.w3.org/XML/1998/namespace lang,attr,omitempty"`
 
 	// Value is the Element's value
 	Value string `xml:",chardata"`

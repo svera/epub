@@ -55,23 +55,23 @@ func (e *Epub) OpenItem(href string) (fs.File, error) {
 	// Prevent path traversal: ensure the resulting path stays within the EPUB archive
 	baseDir := filepath.Dir(e.rootfile)
 	path := filepath.Join(baseDir, name)
-	
+
 	// Clean the path to remove any ".." or "." components
 	cleanPath := filepath.Clean(path)
-	
+
 	// Ensure the cleaned path is still within the base directory
 	if !filepath.IsAbs(cleanPath) {
 		cleanPath = filepath.Join("/", cleanPath)
 	}
-	
+
 	baseClean := filepath.Clean(filepath.Join("/", baseDir))
 	if !strings.HasPrefix(cleanPath, baseClean) {
 		return nil, fmt.Errorf("invalid item path %q: points outside EPUB archive", href)
 	}
-	
+
 	// Remove leading "/" for zip archive access
 	zipPath := strings.TrimPrefix(cleanPath, "/")
-	
+
 	// Verify the file exists in the archive
 	found := false
 	for _, f := range e.File {
@@ -80,11 +80,11 @@ func (e *Epub) OpenItem(href string) (fs.File, error) {
 			break
 		}
 	}
-	
+
 	if !found {
 		return nil, fmt.Errorf("item %q not found in EPUB archive", href)
 	}
-	
+
 	return e.Open(zipPath)
 }
 
@@ -118,7 +118,11 @@ func (e *Epub) Information() (*Information, error) {
 		return nil, err
 	}
 
-	return getMeta(opf.Metadata), nil
+	metadata, err := expandLegacyRefinements(opf.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	return getMeta(metadata), nil
 }
 
 // GetPackageFromFile reads an epub's Open Package Document from an epub  file.

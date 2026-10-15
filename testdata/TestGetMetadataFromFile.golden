@@ -56,9 +56,48 @@
       }
     ],
     "Title": [
-      "Row, Row, Row Your Boat",
-      "Row Your Boat",
-      "First Edition"
+      {
+        "Value": "Row, Row, Row Your Boat",
+        "Refinements": [
+          {
+            "Dir": "",
+            "ID": "",
+            "Property": "title-type",
+            "Refines": "#main",
+            "Scheme": "",
+            "Lang": "",
+            "Value": "main"
+          }
+        ]
+      },
+      {
+        "Value": "Row Your Boat",
+        "Refinements": [
+          {
+            "Dir": "",
+            "ID": "",
+            "Property": "title-type",
+            "Refines": "#short",
+            "Scheme": "",
+            "Lang": "",
+            "Value": "short"
+          }
+        ]
+      },
+      {
+        "Value": "First Edition",
+        "Refinements": [
+          {
+            "Dir": "",
+            "ID": "",
+            "Property": "title-type",
+            "Refines": "#edition",
+            "Scheme": "",
+            "Lang": "",
+            "Value": "edition"
+          }
+        ]
+      }
     ],
     "Language": [
       "en-US"

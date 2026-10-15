@@ -59,12 +59,12 @@ Use `WriteMetadataToFile` with the existing `Information` type to change metadat
 
 ```go
 err := epub.WriteMetadataToFile("book.epub", &epub.Information{
-    Title: []string{"A New Title"},
+    Title: []epub.MetadataValue{{Value: "A New Title"}},
     Creator: []epub.Author{
         {FullName: "Jane Doe", FileAs: "Doe, Jane", Role: "aut"},
     },
-    Subject: []string{}, // Clear subjects.
-    Series: "My Series",
+    Subject: []epub.MetadataValue{}, // Clear subjects.
+    Series: epub.MetadataValue{Value: "My Series"},
 })
 if err != nil {
     panic(err)
@@ -74,8 +74,8 @@ if err != nil {
 When marshaling updates to JSON, `Information`'s `omitempty` tags omit empty
 optional lists; include an explicit `[]` in JSON to clear those fields.
 
-Nil slices and empty series strings preserve existing fields. Empty, non-nil
-slices clear fields. To clear series strings, pass their names explicitly:
+Nil slices and empty series values without refinements preserve existing fields.
+Empty, non-nil slices clear fields. To clear series values, pass their names explicitly:
 
 ```go
 err := epub.WriteMetadataToFile("book.epub", &epub.Information{}, "Series")
@@ -92,6 +92,108 @@ EPUB 3 updates refresh the `dcterms:modified` timestamp.
 Collections explicitly typed as something other than a series are preserved
 and are not reported as series metadata.
 The primary identifier cannot be removed, since the package references it.
+
+#### Field refinements
+
+Every metadata value supports directly attached refinements using the
+existing `Meta` type. Callers choose the property names; the library does not
+define application-specific properties.
+
+Text fields (`Title`, `SubTitle`, `Language`, `Subject`, etc.) now use
+`[]MetadataValue` instead of `[]string`. `Series` and `SeriesIndex` also use
+`MetadataValue`. Identifiers, authors, dates, and legacy name/content metadata
+retain their existing types and each has a `Refinements []Meta` field.
+This is a Go API change: use `.Value` to access text and series values.
+
+```go
+err := epub.WriteMetadataToFile("book.epub", &epub.Information{
+    Title: []epub.MetadataValue{{
+        Value: "A New Title",
+        Refinements: []epub.Meta{{
+            Property: "myvocab:catalogue_id",
+            Value: "book-123",
+        }},
+    }},
+    Creator: []epub.Author{{
+        FullName: "Jane Doe",
+        Role: "aut",
+        Refinements: []epub.Meta{{
+            Property: "cdr:wd_id",
+            Value: "Q42",
+        }},
+    }},
+})
+```
+
+The writer automatically sets `refines` to the corresponding field value's XML ID,
+reusing existing IDs by position or generating IDs for new values.
+Any supplied `Meta.Refines` is overridden. Custom vocabulary prefixes such as
+`cdr` and `myvocab` must already be declared in the package's `prefix` attribute.
+Any nonempty property name is accepted, including standard properties.
+Explicit refinements override automatically generated properties of the same
+name (for example, `role` overrides `Author.Role`).
+Empty properties are rejected. EPUB 3 uses native refinements; EPUB 2 uses the
+legacy fallback described below.
+Optional `Meta` attributes (`ID`, `Scheme`, `Lang`, and `Dir`) are supported;
+IDs must be unique in the package.
+
+Reading metadata returns attached refinements. Standard author role/file-as,
+subtitle classification, and series position are still interpreted by the
+corresponding convenience fields.
+Updating a value replaces its refinements; include the refinements you want to
+keep. Omitting the entire field list preserves its existing metadata.
+For series, refinements can be updated without repeating the value; a nil
+refinement list preserves an omitted series value's properties. An explicit
+empty refinement list clears its refinements while keeping the series value.
+`Series.Refinements` targets the collection; `SeriesIndex.Refinements` targets
+its position element. Calibre series entries in `Meta` remain controlled by
+`Series` and `SeriesIndex`.
+
+The CLI accepts plain strings or refined objects for text and series values,
+including a mixture in the same list:
+
+```json
+{
+  "Title": [
+    {"Value":"A New Title","Refinements":[{"Property":"myvocab:catalogue_id","Value":"book-123"}]},
+    "An Alternative Title"
+  ],
+  "Creator": [
+    {"FullName":"Jane Doe","Refinements":[{"Property":"cdr:wd_id","Value":"Q42"}]}
+  ]
+}
+```
+
+Text values with nil refinements are still emitted as JSON strings. Values with
+explicit refinement lists (including empty lists) are emitted as objects.
+Existing plain-string JSON update files remain accepted.
+
+#### EPUB 2 refinement fallback
+
+The same attached-refinement API works in EPUB 2 without upgrading the file.
+Each refinement is stored as a legacy meta entry whose `content` is a JSON
+serialization of the existing `Meta` type, including its automatic `Refines` target:
+
+```xml
+<meta name="epub:refinement"
+      content="{&quot;Property&quot;:&quot;cdr:wd_id&quot;,&quot;Refines&quot;:&quot;#author-1&quot;,&quot;Value&quot;:&quot;Q42&quot;}"/>
+```
+
+The full JSON also includes the remaining `Meta` fields. If a refinement has an
+`ID`, the fallback element carries that ID as well.
+`epub:refinement` is reserved: add properties through field `Refinements`, not
+through `Information.Meta`. The reader reconstructs the attached refinements
+and hides these transport entries from `Information.Meta`; `Package()` still
+exposes the actual legacy entries.
+
+Replacing or clearing a field removes its old fallback entries, while omitted
+fields retain theirs. Series and index fallback properties target their respective
+Calibre meta entries. Malformed fallback data returns an error on read or write;
+a failed write leaves the original file unchanged.
+
+This is a library convention, not native EPUB 2 refinement support. Other EPUB
+readers may preserve these entries but will not necessarily interpret them.
+The CLI chooses the fallback automatically for EPUB 2 input files.
 
 The writer copies other ZIP entries without recompression, preserves package XML
 outside the updated metadata, and replaces the original file only after completing

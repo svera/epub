@@ -89,9 +89,9 @@ func printField(metadata *epub.Information, field string) {
 	case "subject":
 		fmt.Printf("%v\n", metadata.Subject)
 	case "series":
-		if metadata.Series != "" {
+		if metadata.Series.Value != "" {
 			fmt.Printf("%s", metadata.Series)
-			if metadata.SeriesIndex != "" {
+			if metadata.SeriesIndex.Value != "" {
 				fmt.Printf(" #%s", metadata.SeriesIndex)
 			}
 			fmt.Println()
