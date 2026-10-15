@@ -10,10 +10,11 @@ import (
 
 // metadataEditor holds edit state, not another representation of the metadata.
 type metadataEditor struct {
-	source   *packageXML
-	removed  []bool
-	elements []xml.Token
-	epub3    bool
+	source               *packageXML
+	removed              []bool
+	elements             []xml.Token
+	epub3                bool
+	preservedRefinements map[string]bool
 }
 
 func (e *metadataEditor) prepareRefinements(groups [][]Meta) error {
@@ -81,34 +82,65 @@ func (e *metadataEditor) elementID(ids []string, i int) string {
 	return e.newID()
 }
 
-func (e *metadataEditor) updateTextFields(u *Information) {
+func (e *metadataEditor) updateTextFields(u, existing *Information) error {
 	type field struct {
 		name     string
 		values   []MetadataValue
+		existing []MetadataValue
 		subtitle bool
 	}
 	fields := []field{
-		{"title", u.Title, false}, {"title", u.SubTitle, true},
-		{"language", u.Language, false}, {"coverage", u.Coverage, false},
-		{"description", u.Description, false}, {"format", u.Format, false},
-		{"publisher", u.Publisher, false}, {"relation", u.Relation, false},
-		{"rights", u.Rights, false}, {"source", u.Source, false},
-		{"subject", u.Subject, false}, {"type", u.Type, false},
+		{"title", u.Title, existing.Title, false}, {"title", u.SubTitle, existing.SubTitle, true},
+		{"language", u.Language, existing.Language, false}, {"coverage", u.Coverage, existing.Coverage, false},
+		{"description", u.Description, existing.Description, false}, {"format", u.Format, existing.Format, false},
+		{"publisher", u.Publisher, existing.Publisher, false}, {"relation", u.Relation, existing.Relation, false},
+		{"rights", u.Rights, existing.Rights, false}, {"source", u.Source, existing.Source, false},
+		{"subject", u.Subject, existing.Subject, false}, {"type", u.Type, existing.Type, false},
 	}
 	for _, f := range fields {
 		if f.values == nil {
 			continue
 		}
+		var previous []metadataChild
+		for _, child := range e.source.children {
+			if child.name == (xml.Name{Space: dcNamespace, Local: f.name}) && (f.name != "title" || child.subtitle == f.subtitle) {
+				previous = append(previous, child)
+			}
+		}
 		ids := e.replace(f.name, f.subtitle)
 		for i, value := range f.values {
+			preserveRefinements := value.Value == nil && value.Refinements == nil
+			if value.Value == nil {
+				if i >= len(f.existing) {
+					return fmt.Errorf("%s value %d omits Value but has no existing text", f.name, i+1)
+				}
+				value.Value = f.existing[i].Value
+				if value.Attributes == nil {
+					for _, a := range previous[i].attributes {
+						if a.Name.Space == "xmlns" || a.Name.Space == "http://www.w3.org/2000/xmlns/" ||
+							(a.Name.Space == "" && (a.Name.Local == "id" || a.Name.Local == "xmlns")) {
+							continue
+						}
+						value.Attributes = append(value.Attributes, a)
+					}
+				}
+			}
 			id := e.elementID(ids, i)
-			e.addElement(dcNamespace, f.name, value.Value, append([]xml.Attr{attr("id", id)}, value.Attributes...)...)
-			e.addRefinements(id, value.Refinements)
-			if f.subtitle && !hasProperty(value.Refinements, "title-type") {
-				e.addMeta("", "title-type", id, "subtitle")
+			e.addElement(dcNamespace, f.name, value.String(), append([]xml.Attr{attr("id", id)}, value.Attributes...)...)
+			if preserveRefinements {
+				if e.preservedRefinements == nil {
+					e.preservedRefinements = make(map[string]bool)
+				}
+				e.preservedRefinements[id] = true
+			} else {
+				e.addRefinements(id, value.Refinements)
+				if f.subtitle && !hasProperty(value.Refinements, "title-type") {
+					e.addMeta("", "title-type", id, "subtitle")
+				}
 			}
 		}
 	}
+	return nil
 }
 
 func (e *metadataEditor) updateIdentifiers(values []Identifier, primaryID string) {
@@ -229,7 +261,7 @@ func (e *metadataEditor) updateLegacyMetadata(values []GenericMetadata) error {
 }
 
 func (e *metadataEditor) updateSeries(u *Information, clear map[string]bool, meta []MetaLegacy) error {
-	if u.Series.Value == "" && u.SeriesIndex.Value == "" && u.Series.Refinements == nil &&
+	if u.Series.Value == nil && u.SeriesIndex.Value == nil && u.Series.Refinements == nil &&
 		u.SeriesIndex.Refinements == nil && u.Series.Attributes == nil && u.SeriesIndex.Attributes == nil &&
 		!clear["Series"] && !clear["SeriesIndex"] {
 		return nil
@@ -238,28 +270,30 @@ func (e *metadataEditor) updateSeries(u *Information, clear map[string]bool, met
 	oldSeries, oldIndex := seriesValues(meta)
 	seriesRefinements, indexRefinements := u.Series.Refinements, u.SeriesIndex.Refinements
 	seriesAttributes, indexAttributes := u.Series.Attributes, u.SeriesIndex.Attributes
-	if u.Series.Value == "" && seriesAttributes == nil {
+	if u.Series.Value == nil && seriesAttributes == nil {
 		seriesAttributes = oldSeries.Attributes
 	}
-	if u.SeriesIndex.Value == "" && indexAttributes == nil {
+	if u.SeriesIndex.Value == nil && indexAttributes == nil {
 		indexAttributes = oldIndex.Attributes
 	}
-	if u.Series.Value == "" && seriesRefinements == nil {
+	if u.Series.Value == nil && seriesRefinements == nil {
 		seriesRefinements = oldSeries.Refinements
 	}
-	if u.SeriesIndex.Value == "" && indexRefinements == nil {
+	if u.SeriesIndex.Value == nil && indexRefinements == nil {
 		indexRefinements = oldIndex.Refinements
 	}
-	if u.Series.Value != "" {
-		series = u.Series.Value
+	if u.Series.Value != nil {
+		series = *u.Series.Value
 	}
-	if u.SeriesIndex.Value != "" {
-		index = u.SeriesIndex.Value
+	if u.SeriesIndex.Value != nil {
+		index = *u.SeriesIndex.Value
 	}
-	if clear["Series"] {
+	clearSeries := clear["Series"] || (u.Series.Value != nil && *u.Series.Value == "")
+	clearIndex := clear["SeriesIndex"] || (u.SeriesIndex.Value != nil && *u.SeriesIndex.Value == "")
+	if clearSeries {
 		series, index = "", ""
 	}
-	if clear["SeriesIndex"] {
+	if clearIndex {
 		index = ""
 		filtered := make([]Meta, 0, len(seriesRefinements))
 		for _, m := range seriesRefinements {
@@ -272,13 +306,13 @@ func (e *metadataEditor) updateSeries(u *Information, clear map[string]bool, met
 	if series == "" && index != "" {
 		return fmt.Errorf("series index requires a series name")
 	}
-	if !clear["Series"] && series == "" && (len(u.Series.Refinements) != 0 || len(u.Series.Attributes) != 0) {
+	if !clearSeries && series == "" && (len(u.Series.Refinements) != 0 || len(u.Series.Attributes) != 0) {
 		return fmt.Errorf("series refinements or attributes require a series name")
 	}
-	if !clear["Series"] && !clear["SeriesIndex"] && index == "" && (len(u.SeriesIndex.Refinements) != 0 || len(u.SeriesIndex.Attributes) != 0) {
+	if !clearSeries && !clearIndex && index == "" && (len(u.SeriesIndex.Refinements) != 0 || len(u.SeriesIndex.Attributes) != 0) {
 		return fmt.Errorf("series index refinements or attributes require an index")
 	}
-	if !clear["Series"] && hasProperty(seriesRefinements, "group-position") &&
+	if !clearSeries && hasProperty(seriesRefinements, "group-position") &&
 		(len(indexRefinements) != 0 || len(indexAttributes) != 0) {
 		return fmt.Errorf("set SeriesIndex instead of a group-position refinement when refining the index or adding attributes")
 	}
@@ -358,7 +392,7 @@ func (e *metadataEditor) removeRefinements() {
 				continue
 			}
 			for j, target := range e.source.children {
-				if e.removed[j] && target.id != "" && c.refines == "#"+target.id {
+				if e.removed[j] && target.id != "" && c.refines == "#"+target.id && !e.preservedRefinements[target.id] {
 					e.removed[i], changed = true, true
 					break
 				}

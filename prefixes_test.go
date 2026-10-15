@@ -41,7 +41,7 @@ func TestWritePackagePrefixes(t *testing.T) {
 					t.Fatal("repeated update duplicated declarations or lost refinement")
 				}
 			}
-			if err := WriteMetadataToFile(path, &Information{Publisher: []MetadataValue{{Value: "Publisher"}}}); err != nil {
+			if err := WriteMetadataToFile(path, &Information{Publisher: []MetadataValue{NewMetadataValue("Publisher")}}); err != nil {
 				t.Fatal(err)
 			}
 			if readWriteTestMetadata(t, path).Prefixes["cdr"] != update.Prefixes["cdr"] {

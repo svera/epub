@@ -11,31 +11,44 @@ import (
 // sets each refinement's Refines target automatically.
 // Refinements require EPUB 3; Attributes works in both EPUB versions.
 // In JSON, plain values are strings; values with refinements or attributes are objects.
+// A nil Value preserves existing text when editing; a non-nil Value replaces it.
 type MetadataValue struct {
-	Value       string
-	Refinements []Meta
+	Value       *string    `json:",omitempty"`
+	Refinements []Meta     `json:",omitempty"`
 	Attributes  []xml.Attr `json:",omitempty"`
 }
 
-func (v MetadataValue) String() string { return v.Value }
+// NewMetadataValue creates a value with explicitly supplied text, including "".
+func NewMetadataValue(value string) MetadataValue {
+	return MetadataValue{Value: &value}
+}
 
-// MarshalJSON preserves plain strings and explicit empty attribute lists.
-func (v MetadataValue) MarshalJSON() ([]byte, error) {
-	if v.Refinements == nil && v.Attributes == nil {
-		return json.Marshal(v.Value)
+func (v MetadataValue) String() string {
+	if v.Value == nil {
+		return ""
 	}
-	type value MetadataValue
+	return *v.Value
+}
+
+func (v MetadataValue) MarshalJSON() ([]byte, error) {
+	if v.Value != nil && v.Refinements == nil && v.Attributes == nil {
+		return json.Marshal(*v.Value)
+	}
+	var refinements *[]Meta
 	var attributes *[]xml.Attr
+	if v.Refinements != nil {
+		refinements = &v.Refinements
+	}
 	if v.Attributes != nil {
 		attributes = &v.Attributes
 	}
 	return json.Marshal(struct {
-		value
-		Attributes *[]xml.Attr `json:",omitempty"`
-	}{value(v), attributes})
+		Value       *string     `json:",omitempty"`
+		Refinements *[]Meta     `json:",omitempty"`
+		Attributes  *[]xml.Attr `json:",omitempty"`
+	}{v.Value, refinements, attributes})
 }
 
-// UnmarshalJSON accepts a string or a value with refinements or attributes.
 func (v *MetadataValue) UnmarshalJSON(data []byte) error {
 	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
 		*v = MetadataValue{}
@@ -46,7 +59,7 @@ func (v *MetadataValue) UnmarshalJSON(data []byte) error {
 		if err := json.Unmarshal(data, &text); err != nil {
 			return err
 		}
-		*v = MetadataValue{Value: text}
+		*v = NewMetadataValue(text)
 		return nil
 	}
 	type value MetadataValue
@@ -130,10 +143,10 @@ type Information struct {
 func (m Information) MarshalJSON() ([]byte, error) {
 	type information Information
 	var series, index *MetadataValue
-	if m.Series.Value != "" || m.Series.Refinements != nil || m.Series.Attributes != nil {
+	if m.Series.Value != nil || m.Series.Refinements != nil || m.Series.Attributes != nil {
 		series = &m.Series
 	}
-	if m.SeriesIndex.Value != "" || m.SeriesIndex.Refinements != nil || m.SeriesIndex.Attributes != nil {
+	if m.SeriesIndex.Value != nil || m.SeriesIndex.Refinements != nil || m.SeriesIndex.Attributes != nil {
 		index = &m.SeriesIndex
 	}
 	return json.Marshal(struct {
@@ -279,7 +292,13 @@ func getMeta(mdata *Metadata) *Information {
 }
 
 func seriesValues(meta []MetaLegacy) (series, index MetadataValue) {
-	series.Value, index.Value = getSeries(meta)
+	seriesText, indexText := getSeries(meta)
+	if seriesText != "" {
+		series = NewMetadataValue(seriesText)
+	}
+	if indexText != "" {
+		index = NewMetadataValue(indexText)
+	}
 	if collection := seriesCollection(meta); collection != nil {
 		series.Refinements = refinementsFor(collection.ID, meta, "collection-type", "group-position")
 		series.Attributes = collection.Attributes
@@ -308,7 +327,7 @@ func metadataValues(elt []Element, meta []MetaLegacy) []MetadataValue {
 	s := make([]MetadataValue, len(elt))
 
 	for i, e := range elt {
-		s[i] = MetadataValue{Value: e.Value, Refinements: refinementsFor(e.ID, meta), Attributes: e.Attributes}
+		s[i] = MetadataValue{Value: &elt[i].Value, Refinements: refinementsFor(e.ID, meta), Attributes: e.Attributes}
 	}
 	return s
 }
@@ -372,20 +391,20 @@ func getTitles(elt []Element, meta []MetaLegacy) (title []MetadataValue, subtitl
 		}
 	}
 
-	for _, e := range elt {
+	for i, e := range elt {
 		// Check if this element has title-type metadata
 		if metas, exists := metaMap["#"+e.ID]; exists {
 			for _, m := range metas {
 				if m.Property == "title-type" {
 					switch m.Value {
 					case "subtitle":
-						subtitle = append(subtitle, MetadataValue{Value: e.Value, Refinements: refinementsFor(e.ID, meta, "title-type"), Attributes: e.Attributes})
+						subtitle = append(subtitle, MetadataValue{Value: &elt[i].Value, Refinements: refinementsFor(e.ID, meta, "title-type"), Attributes: e.Attributes})
 						goto nextElt
 					}
 				}
 			}
 		}
-		title = append(title, MetadataValue{Value: e.Value, Refinements: refinementsFor(e.ID, meta), Attributes: e.Attributes})
+		title = append(title, MetadataValue{Value: &elt[i].Value, Refinements: refinementsFor(e.ID, meta), Attributes: e.Attributes})
 	nextElt:
 	}
 

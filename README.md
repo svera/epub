@@ -59,12 +59,12 @@ Use `WriteMetadataToFile` with the existing `Information` type to change metadat
 
 ```go
 err := epub.WriteMetadataToFile("book.epub", &epub.Information{
-    Title: []epub.MetadataValue{{Value: "A New Title"}},
+    Title: []epub.MetadataValue{epub.NewMetadataValue("A New Title")},
     Creator: []epub.Author{
         {FullName: "Jane Doe", FileAs: "Doe, Jane", Role: "aut"},
     },
     Subject: []epub.MetadataValue{}, // Clear subjects.
-    Series: epub.MetadataValue{Value: "My Series"},
+    Series: epub.NewMetadataValue("My Series"),
 })
 if err != nil {
     panic(err)
@@ -74,18 +74,36 @@ if err != nil {
 When marshaling updates to JSON, `Information`'s `omitempty` tags omit empty
 optional lists; include an explicit `[]` in JSON to clear those fields.
 
-Nil slices and empty series values without refinements preserve existing fields.
-Empty, non-nil slices clear fields. To clear series values, pass their names explicitly:
+Nil slices preserve existing fields; empty, non-nil slices clear fields.
+All text fields, including `Series` and `SeriesIndex`, use `MetadataValue`,
+whose `Value *string` distinguishes omitted text from explicitly empty text.
+A nil `Value` preserves the existing text. For series fields, an empty string
+clears the field:
 
 ```go
-err := epub.WriteMetadataToFile("book.epub", &epub.Information{}, "Series")
+err := epub.WriteMetadataToFile("book.epub", &epub.Information{
+    SeriesIndex: epub.NewMetadataValue(""), // Clear only the index.
+})
 ```
 
-The clear list accepts `Series` and `SeriesIndex` and takes precedence over
-supplied values. Clearing `Series` also clears its index; clearing only
-`SeriesIndex` preserves the series name. Unknown clear fields are rejected.
-Title and subtitle updates are independent. Replacing a field also replaces its
-associated refinements. `Meta` replaces legacy name/content metadata except
+The CLI accepts `{"SeriesIndex":""}` or `{"Series":""}` without a separate flag.
+Omitted fields and JSON `null` leave values unchanged. Clearing `Series` also
+clears its index; clearing only `SeriesIndex` preserves the series name.
+An object with an omitted or null `Value` can update only refinements or
+attributes, such as `{"Series":{"Attributes":[]}}`.
+In text lists, entries match existing values by position. For example,
+`{"Title":[{"Attributes":[]}]}` preserves the first title's text and refinements
+while clearing its attributes. Omitted property lists preserve those properties;
+explicit empty lists clear them. An entry without `Value` requires an existing
+value at that position; otherwise the update fails without changing the file.
+List updates still replace the entire list, so include entries for every value
+you want to retain. An explicit empty string writes empty text; use `[]` to
+remove all values of a list field.
+The CLI no longer supports `--clear`; supply empty series strings in the update
+JSON instead. The Go `clearFields` argument remains a deprecated compatibility
+option and overrides supplied values.
+Title and subtitle updates are independent. Supplying replacement text also
+replaces its associated refinements and attributes. `Meta` replaces legacy name/content metadata except
 Calibre series entries; use `Series` and `SeriesIndex` to update those. Series
 updates use Calibre metadata for EPUB 2 and collection metadata for EPUB 3.
 EPUB 3 updates refresh the `dcterms:modified` timestamp.
@@ -100,19 +118,24 @@ existing `Meta` type. Callers choose the property names; the library does not
 define application-specific properties.
 
 Text fields (`Title`, `SubTitle`, `Language`, `Subject`, etc.) now use
-`[]MetadataValue` instead of `[]string`. `Series` and `SeriesIndex` also use
-`MetadataValue`. Identifiers, authors, dates, and legacy name/content metadata
+`[]MetadataValue` instead of `[]string`. `Series` and `SeriesIndex` use
+the same `MetadataValue` type with an optional `Value *string`. Identifiers, authors, dates, and legacy name/content metadata
 retain their existing types and each has a `Refinements []Meta` field.
-This is a Go API change: use `.Value` to access text and series values.
+This is a Go API change: use `.String()` to read text safely, or inspect `.Value`
+to distinguish omitted text from an explicit empty string.
+Construct text and series updates with `NewMetadataValue`,
+or use `MetadataValue{Refinements: ...}` / `MetadataValue{Attributes: ...}` for
+property-only updates without repeating the text.
 
 ```go
+title := "A New Title"
 err := epub.WriteMetadataToFile("book.epub", &epub.Information{
     Prefixes: map[string]string{
         "myvocab": "https://example.org/vocabulary/",
         "cdr": "https://example.org/cdr/",
     },
     Title: []epub.MetadataValue{{
-        Value: "A New Title",
+        Value: &title,
         Refinements: []epub.Meta{{
             Property: "myvocab:catalogue_id",
             Value: "book-123",
@@ -417,7 +440,7 @@ epub file1.epub file2.epub
 epub --write metadata.json mybook.epub
 
 # Read updates from stdin; omitted fields stay unchanged, [] clears a list
-printf '%s' '{"Title":["New Title"],"Subject":[]}' | epub --write - --clear Series mybook.epub
+printf '%s' '{"Title":["New Title"],"Subject":[],"Series":""}' | epub --write - mybook.epub
 ```
 
 The JSON update object accepts the same field names as `Information`.

@@ -18,9 +18,12 @@ const (
 )
 
 // WriteMetadataToFile applies updates to the default rendition of an EPUB.
-// Nil slices and empty series values without refinements leave fields unchanged.
-// Non-nil empty slices clear fields. clearFields accepts "Series" and "SeriesIndex" to explicitly
-// clear those string fields, overriding any supplied values.
+// Nil slices leave fields unchanged; non-nil empty slices clear fields.
+// A nil MetadataValue.Value preserves existing text and omitted properties.
+// Text-list entries match existing values by position; missing targets fail.
+// Explicitly empty series values clear the series or index.
+// clearFields is a deprecated compatibility option accepting "Series" and
+// "SeriesIndex"; it overrides supplied values.
 // Meta replaces legacy name/content metadata except Calibre series entries.
 // Refinements automatically target each value's XML ID and require EPUB 3.
 // Attributes writes custom XML attributes directly in either EPUB version.
@@ -123,6 +126,7 @@ func WriteMetadataToFile(path string, updates *Information, clearFields ...strin
 }
 
 type metadataChild struct {
+	attributes []xml.Attr
 	start, end int
 	name       xml.Name
 	id         string
@@ -194,7 +198,7 @@ func scanPackageXML(data []byte) (*packageXML, error) {
 				p.metadataName = strings.Fields(string(tag[1:]))[0]
 				p.metadataName = strings.TrimRight(p.metadataName, "/>")
 			} else if metadataDepth != 0 && depth == metadataDepth+1 && end == -1 {
-				child := metadataChild{start: start, name: t.Name}
+				child := metadataChild{start: start, name: t.Name, attributes: append([]xml.Attr(nil), t.Attr...)}
 				for _, a := range t.Attr {
 					if a.Name.Space != "" {
 						continue
@@ -306,7 +310,9 @@ func updatePackageMetadata(data []byte, u *Information, clear map[string]bool) (
 	if err := editor.prepareRefinements(u.refinementGroups()); err != nil {
 		return nil, err
 	}
-	editor.updateTextFields(u)
+	if err := editor.updateTextFields(u, getMeta(pkg.Metadata)); err != nil {
+		return nil, err
+	}
 	editor.updateIdentifiers(u.Identifier, pkg.UniqueIdentifier)
 	editor.updateAuthors("creator", u.Creator)
 	editor.updateAuthors("contributor", u.Contributor)

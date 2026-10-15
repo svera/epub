@@ -17,9 +17,9 @@ func TestReadMetadataUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(update.Title) != 1 || update.Title[0].Value != "New" ||
+	if len(update.Title) != 1 || update.Title[0].String() != "New" ||
 		update.Subject == nil || len(update.Subject) != 0 ||
-		update.Series.Value != "" || update.Creator != nil {
+		update.Series.Value == nil || update.Series.String() != "" || update.Creator != nil {
 		t.Fatalf("incorrect partial update: %+v", update)
 	}
 	for _, input := range []string{
@@ -70,7 +70,7 @@ func TestCLIWrite(t *testing.T) {
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
-	for _, mode := range []string{"file", "stdin", "refined", "attributes epub2", "invalid", "multiple", "missing", "clear", "invalid clear", "clear without write"} {
+	for _, mode := range []string{"file", "stdin", "refined", "attributes epub2", "invalid", "multiple", "missing", "clear JSON", "clear index JSON", "removed clear", "removed clear without write", "help"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "book.epub")
@@ -127,30 +127,45 @@ func TestCLIWrite(t *testing.T) {
 				if mode == "refined" && info.Prefixes["cdr"] != "https://example.org/cdr/" {
 					t.Fatal("CLI did not persist prefix declaration")
 				}
-			case "clear":
-				if err := epub.WriteMetadataToFile(path, &epub.Information{Series: epub.MetadataValue{Value: "Series"}, SeriesIndex: epub.MetadataValue{Value: "3"}}); err != nil {
+			case "clear JSON", "clear index JSON":
+				if err := epub.WriteMetadataToFile(path, &epub.Information{Series: epub.NewMetadataValue("Series"), SeriesIndex: epub.NewMetadataValue("3")}); err != nil {
 					t.Fatal(err)
 				}
-				out, err = run(update, "--write", "-", "--clear", "Series", "--field", "title", path)
+				switch mode {
+				case "clear JSON":
+					out, err = run(`{"Title":["CLI title"],"Subject":[],"Series":""}`, "--write", "-", "--field", "title", path)
+				case "clear index JSON":
+					out, err = run(`{"Title":["CLI title"],"Subject":[],"SeriesIndex":""}`, "--write", "-", "--field", "title", path)
+				}
 				info, readErr := epub.GetMetadataFromFile(path)
 				if readErr != nil {
 					t.Fatal(readErr)
 				}
-				if info.Series.Value != "" || info.SeriesIndex.Value != "" {
+				wantSeries := ""
+				if mode == "clear index JSON" {
+					wantSeries = "Series"
+				}
+				if info.Series.String() != wantSeries || info.SeriesIndex.String() != "" {
 					t.Fatalf("CLI did not clear series: %+v", info)
 				}
-			case "invalid clear", "clear without write":
+			case "removed clear", "removed clear without write":
 				args := []string{"--clear", "Series", path}
-				if mode == "invalid clear" {
-					args = []string{"--write", "-", "--clear", "Unknown", path}
+				if mode == "removed clear" {
+					args = []string{"--write", "-", "--clear", "Series", path}
 				}
 				out, err = run(update, args...)
-				if err == nil || !strings.Contains(out, "Error:") {
-					t.Fatalf("invalid clear options accepted: %v\n%s", err, out)
+				if err == nil || !strings.Contains(out, "flag provided but not defined: -clear") {
+					t.Fatalf("removed clear flag was not rejected: %v\n%s", err, out)
 				}
 				after, readErr := os.ReadFile(path)
 				if readErr != nil || string(after) != string(source) {
 					t.Fatalf("invalid clear options modified original: %v", readErr)
+				}
+				return
+			case "help":
+				out, err = run("", "--help")
+				if err != nil || !strings.Contains(out, "-write") || strings.Contains(out, "-clear") {
+					t.Fatalf("unexpected CLI help: %v\n%s", err, out)
 				}
 				return
 			case "invalid":
@@ -173,7 +188,7 @@ func TestCLIWrite(t *testing.T) {
 				if readErr != nil {
 					t.Fatal(readErr)
 				}
-				if len(info.Title) != 1 || info.Title[0].Value != "CLI title" {
+				if len(info.Title) != 1 || info.Title[0].String() != "CLI title" {
 					t.Fatalf("second file was not updated: %+v", info)
 				}
 			case "missing":
@@ -190,7 +205,7 @@ func TestCLIWrite(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(info.Title) != 1 || info.Title[0].Value != "CLI title" || len(info.Subject) != 0 {
+			if len(info.Title) != 1 || info.Title[0].String() != "CLI title" || len(info.Subject) != 0 {
 				t.Fatalf("CLI update was not persisted: %+v", info)
 			}
 		})

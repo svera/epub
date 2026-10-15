@@ -18,12 +18,12 @@ func TestMetadataAttributes(t *testing.T) {
 			update := &Information{
 				Creator:     []Author{{FullName: "Horacio", Role: "aut", FileAs: "Horacio", Attributes: attributes}},
 				Contributor: []Author{{FullName: "Translator", Attributes: attributes}},
-				Title:       []MetadataValue{{Value: "Title", Attributes: attributes}},
+				Title:       []MetadataValue{{Value: NewMetadataValue("Title").Value, Attributes: attributes}},
 				Identifier:  []Identifier{{Value: "ID", Attributes: attributes}},
 				Date:        []Date{{Stamp: "2026", Attributes: attributes}},
 				Meta:        []GenericMetadata{{Name: "vendor:id", Content: "ID", Attributes: attributes}},
-				Series:      MetadataValue{Value: "Series", Attributes: attributes},
-				SeriesIndex: MetadataValue{Value: "1", Attributes: attributes},
+				Series:      MetadataValue{Value: seriesText("Series"), Attributes: attributes},
+				SeriesIndex: MetadataValue{Value: seriesText("1"), Attributes: attributes},
 			}
 			for iteration := 0; iteration < 2; iteration++ {
 				if err := WriteMetadataToFile(path, update); err != nil {
@@ -76,7 +76,7 @@ func TestMetadataAttributes(t *testing.T) {
 				t.Fatal(err)
 			}
 			got = readWriteTestMetadata(t, path)
-			if got.Series.Value != "Series" || len(got.Series.Attributes) != 0 || len(got.SeriesIndex.Attributes) == 0 {
+			if got.Series.String() != "Series" || len(got.Series.Attributes) != 0 || len(got.SeriesIndex.Attributes) == 0 {
 				t.Fatal("clearing series attributes changed omitted values or index attributes")
 			}
 		})
@@ -159,7 +159,7 @@ func TestRefinementAttributes(t *testing.T) {
 		Property: "alternate-script", Value: "Other script",
 		Attributes: []xml.Attr{{Name: xml.Name{Local: "vendor"}, Value: "custom"}},
 	}
-	update := &Information{Title: []MetadataValue{{Value: "Title", Refinements: []Meta{refinement}}}}
+	update := &Information{Title: []MetadataValue{{Value: NewMetadataValue("Title").Value, Refinements: []Meta{refinement}}}}
 	for i := 0; i < 2; i++ {
 		if err := WriteMetadataToFile(path, update); err != nil {
 			t.Fatal(err)

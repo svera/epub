@@ -58,9 +58,13 @@ func TestEncodeMetadataRejectsInvalidElements(t *testing.T) {
 	}
 }
 
+func seriesText(value string) *string {
+	return &value
+}
+
 func TestInformationUpdateJSON(t *testing.T) {
 	update := Information{
-		Title: []MetadataValue{{Value: "New title"}}, Series: MetadataValue{Value: "Series"}, SeriesIndex: MetadataValue{Value: "2"},
+		Title: []MetadataValue{NewMetadataValue("New title")}, Series: MetadataValue{Value: seriesText("Series")}, SeriesIndex: MetadataValue{Value: seriesText("2")},
 	}
 	data, err := json.Marshal(update)
 	if err != nil {
@@ -83,14 +87,136 @@ func TestInformationUpdateJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{}`), &omitted); err != nil {
 		t.Fatal(err)
 	}
-	if omitted.Title != nil || omitted.Series.Value != "" || omitted.SeriesIndex.Value != "" {
+	if omitted.Title != nil || omitted.Series.Value != nil || omitted.SeriesIndex.Value != nil {
 		t.Fatalf("omitted fields are not nil: %+v", omitted)
+	}
+}
+
+func TestOptionalSeriesJSON(t *testing.T) {
+	for _, input := range []string{
+		`{}`,
+		`{"Series":null,"SeriesIndex":null}`,
+		`{"Series":"","SeriesIndex":""}`,
+		`{"Series":"Collection","SeriesIndex":"2"}`,
+		`{"Series":{"Attributes":[]}}`,
+		`{"Series":{"Refinements":[]},"SeriesIndex":{"Value":null,"Attributes":[]}}`,
+		`{"Series":{"Value":"","Attributes":[]},"SeriesIndex":{"Value":"","Refinements":[]}}`,
+	} {
+		t.Run(input, func(t *testing.T) {
+			var update Information
+			if err := json.Unmarshal([]byte(input), &update); err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(update)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded Information
+			if err := json.Unmarshal(encoded, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(update, decoded) {
+				t.Fatalf("optional series state lost: %s -> %s", input, encoded)
+			}
+			if input == `{"Series":"","SeriesIndex":""}` && (update.Series.Value == nil || update.SeriesIndex.Value == nil) {
+				t.Fatal("explicit empty strings must retain non-nil value pointers")
+			}
+		})
+	}
+	for _, input := range []string{
+		`{"Series":[]}`, `{"Series":1}`, `{"Series":false}`,
+		`{"Series":{"Unknown":""}}`, `{"SeriesIndex":{"Value":5}}`,
+	} {
+		var update Information
+		if err := json.Unmarshal([]byte(input), &update); err == nil {
+			t.Fatalf("invalid optional series accepted: %s", input)
+		}
+	}
+}
+
+func TestWriteSeriesJSONUpdates(t *testing.T) {
+	for _, version := range []string{"2.0", "3.0"} {
+		for _, tc := range []struct {
+			json   string
+			series string
+			index  string
+		}{
+			{`{}`, "Old series", "1"},
+			{`{"Series":null,"SeriesIndex":null}`, "Old series", "1"},
+			{`{"Series":{},"SeriesIndex":{}}`, "Old series", "1"},
+			{`{"Series":{"Attributes":[]},"SeriesIndex":{"Refinements":[]}}`, "Old series", "1"},
+			{`{"Series":{"Value":null,"Attributes":[]}}`, "Old series", "1"},
+			{`{"Series":"New series","SeriesIndex":"2"}`, "New series", "2"},
+			{`{"SeriesIndex":""}`, "Old series", ""},
+			{`{"Series":""}`, "", ""},
+			{`{"Series":{"Value":"","Attributes":[]}}`, "", ""},
+			{`{"SeriesIndex":{"Value":"","Attributes":[]}}`, "Old series", ""},
+			{`{"Series":"","SeriesIndex":"2"}`, "", ""},
+		} {
+			t.Run(version+"/"+tc.json, func(t *testing.T) {
+				path := createWriteTestEPUB(t, strings.ReplaceAll(writeTestPackage, "VERSION", version))
+				var update Information
+				if err := json.Unmarshal([]byte(tc.json), &update); err != nil {
+					t.Fatal(err)
+				}
+				if err := WriteMetadataToFile(path, &update); err != nil {
+					t.Fatal(err)
+				}
+				info := readWriteTestMetadata(t, path)
+				if info.Series.String() != tc.series || info.SeriesIndex.String() != tc.index {
+					t.Fatalf("got series %q, index %q; want %q, %q",
+						info.Series, info.SeriesIndex, tc.series, tc.index)
+				}
+				if tc.series == "" && info.Series.Value != nil {
+					t.Fatal("absent series must be read with a nil value")
+				}
+				if tc.index == "" && info.SeriesIndex.Value != nil {
+					t.Fatal("absent index must be read with a nil value")
+				}
+			})
+		}
+	}
+}
+
+func TestWriteSeriesPropertiesWithoutValue(t *testing.T) {
+	for _, version := range []string{"2.0", "3.0"} {
+		t.Run(version, func(t *testing.T) {
+			path := createWriteTestEPUB(t, strings.ReplaceAll(writeTestPackage, "VERSION", version))
+			attributes := []xml.Attr{{Name: xml.Name{Local: "custom"}, Value: "keep"}}
+			update := &Information{
+				Series:      MetadataValue{Attributes: attributes},
+				SeriesIndex: MetadataValue{Attributes: attributes},
+			}
+			if version == "3.0" {
+				update.Series.Refinements = []Meta{{Property: "custom:series", Value: "name-id"}}
+				update.SeriesIndex.Refinements = []Meta{{Property: "custom:index", Value: "index-id"}}
+			}
+			if err := WriteMetadataToFile(path, update); err != nil {
+				t.Fatal(err)
+			}
+			got := readWriteTestMetadata(t, path)
+			if got.Series.String() != "Old series" || got.SeriesIndex.String() != "1" {
+				t.Fatal("property-only updates changed series text")
+			}
+			if !reflect.DeepEqual(got.Series.Attributes, attributes) || !reflect.DeepEqual(got.SeriesIndex.Attributes, attributes) {
+				t.Fatal("property-only updates lost attributes")
+			}
+			if version == "3.0" && (len(got.Series.Refinements) != 1 || len(got.SeriesIndex.Refinements) != 1) {
+				t.Fatal("property-only updates lost refinements")
+			}
+		})
 	}
 }
 
 func TestMetadataValueJSON(t *testing.T) {
 	for _, input := range []string{
+		`null`,
+		`{}`,
+		`{"Value":null}`,
+		`""`,
 		`"Plain"`,
+		`{"Attributes":[]}`,
+		`{"Value":null,"Refinements":[]}`,
 		`{"Value":"Refined","Refinements":[{"Property":"custom:any_name","Value":"Q42"}]}`,
 		`{"Value":"","Refinements":[]}`,
 		`{"Value":"Attributed","Attributes":[{"Name":{"Local":"wd_id"},"Value":"Q42"}]}`,
@@ -118,12 +244,148 @@ func TestMetadataValueJSON(t *testing.T) {
 			t.Errorf("accepted invalid metadata value: %s", input)
 		}
 	}
-	value := MetadataValue{Value: "old", Refinements: []Meta{{Property: "custom:old"}}}
+	value := MetadataValue{Value: NewMetadataValue("old").Value, Refinements: []Meta{{Property: "custom:old"}}}
 	if err := json.Unmarshal([]byte(`"new"`), &value); err != nil {
 		t.Fatal(err)
 	}
-	if value.Value != "new" || value.Refinements != nil {
+	if value.String() != "new" || value.Refinements != nil {
 		t.Fatal("decoding a string retained stale refinements")
+	}
+}
+
+func TestWriteOptionalTextFields(t *testing.T) {
+	for _, version := range []string{"2.0", "3.0"} {
+		for _, field := range []string{
+			"Title", "SubTitle", "Language", "Coverage", "Description", "Format",
+			"Publisher", "Relation", "Rights", "Source", "Subject", "Type",
+		} {
+			t.Run(version+"/"+field, func(t *testing.T) {
+				path := createWriteTestEPUB(t, strings.ReplaceAll(writeTestPackage, "VERSION", version))
+				attributes := []xml.Attr{{Name: xml.Name{Local: "custom"}, Value: "keep"}}
+				values := []MetadataValue{NewMetadataValue("First"), NewMetadataValue("Second")}
+				for i := range values {
+					values[i].Attributes = attributes
+				}
+				if version == "3.0" {
+					values[0].Refinements = []Meta{{Property: "custom:keep", Value: "old"}}
+				}
+				update := &Information{}
+				reflect.ValueOf(update).Elem().FieldByName(field).Set(reflect.ValueOf(values))
+				if err := WriteMetadataToFile(path, update); err != nil {
+					t.Fatal(err)
+				}
+				original := reflect.ValueOf(readWriteTestMetadata(t, path)).Elem().FieldByName(field).Interface().([]MetadataValue)
+				writeJSON := func(entries string) []MetadataValue {
+					t.Helper()
+					var update Information
+					if err := json.Unmarshal([]byte(fmt.Sprintf(`{%q:%s}`, field, entries)), &update); err != nil {
+						t.Fatal(err)
+					}
+					if err := WriteMetadataToFile(path, &update); err != nil {
+						t.Fatal(err)
+					}
+					info := readWriteTestMetadata(t, path)
+					return reflect.ValueOf(info).Elem().FieldByName(field).Interface().([]MetadataValue)
+				}
+				got := writeJSON(`[{},{"Value":null,"Attributes":[]}]`)
+				if len(got) != 2 || got[0].String() != "First" || got[1].String() != "Second" {
+					t.Fatalf("omitted values lost existing text: %+v", got)
+				}
+				if !reflect.DeepEqual(got[0].Attributes, attributes) || len(got[1].Attributes) != 0 {
+					t.Fatalf("omitted and empty attributes were not distinguished: %+v", got)
+				}
+				if !reflect.DeepEqual(got[0].Refinements, original[0].Refinements) {
+					t.Fatalf("omitted refinements changed: %+v", got[0].Refinements)
+				}
+				got = writeJSON(`[{"Refinements":[]},{"Attributes":[{"Name":{"Local":"custom"},"Value":"new"}]}]`)
+				if got[0].String() != "First" || got[1].String() != "Second" ||
+					len(got[0].Refinements) != 0 || !reflect.DeepEqual(got[0].Attributes, attributes) ||
+					len(got[1].Attributes) != 1 || got[1].Attributes[0].Value != "new" {
+					t.Fatalf("property-only replacement changed unrelated metadata: %+v", got)
+				}
+				if version == "3.0" {
+					got = writeJSON(`[{"Refinements":[{"Property":"custom:new","Value":"new"}]},null]`)
+					if got[0].String() != "First" || got[1].String() != "Second" ||
+						len(got[0].Refinements) != 1 || got[0].Refinements[0].Property != "custom:new" ||
+						!reflect.DeepEqual(got[0].Attributes, attributes) || len(got[1].Attributes) != 1 {
+						t.Fatalf("refinement-only update changed text or attributes: %+v", got)
+					}
+				}
+				got = writeJSON(`["",null]`)
+				if len(got) != 2 || got[0].Value == nil || got[0].String() != "" ||
+					got[1].String() != "Second" || len(got[0].Refinements) != 0 || len(got[0].Attributes) != 0 {
+					t.Fatalf("explicit empty text did not replace the value: %+v", got)
+				}
+				if got = writeJSON(`[]`); len(got) != 0 {
+					t.Fatalf("empty list did not clear the field: %+v", got)
+				}
+			})
+		}
+	}
+}
+
+func TestWriteOptionalTextPreservesInheritedProperties(t *testing.T) {
+	path := createWriteTestEPUB(t, strings.ReplaceAll(writeTestPackage, "VERSION", "3.0"))
+	for _, input := range []string{
+		`{"Title":[null],"SubTitle":[{}]}`,
+		`{"Title":[{"Attributes":[]}],"SubTitle":[{"Attributes":[]}]}`,
+	} {
+		var update Information
+		if err := json.Unmarshal([]byte(input), &update); err != nil {
+			t.Fatal(err)
+		}
+		if err := WriteMetadataToFile(path, &update); err != nil {
+			t.Fatal(err)
+		}
+		pkg, err := GetPackageFromFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, preserved := range []Meta{
+			{ID: "title-sort", Property: "file-as", Refines: "#title", Value: "Original"},
+			{Property: "alternate-script", Refines: "#title-sort", Value: "Old sort"},
+			{Property: "title-type", Refines: "#subtitle", Value: "subtitle"},
+		} {
+			found := false
+			for _, m := range pkg.Metadata.Meta {
+				found = found || reflect.DeepEqual(m.Meta, &preserved)
+			}
+			if !found {
+				t.Fatalf("property-only update removed existing refinement %+v", preserved)
+			}
+		}
+		if input == `{"Title":[null],"SubTitle":[{}]}` && pkg.Metadata.Title[0].Lang != "en" {
+			t.Fatal("omitted attributes removed xml:lang")
+		}
+	}
+}
+
+func TestWriteOptionalTextRequiresExistingValue(t *testing.T) {
+	for _, version := range []string{"2.0", "3.0"} {
+		for _, input := range []string{
+			`{"Coverage":[{}]}`,
+			`{"Title":["New title",null]}`,
+			`{"Title":["New title"],"Description":[{"Attributes":[]}]}`,
+		} {
+			t.Run(version+"/"+input, func(t *testing.T) {
+				path := createWriteTestEPUB(t, strings.ReplaceAll(writeTestPackage, "VERSION", version))
+				before, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var update Information
+				if err := json.Unmarshal([]byte(input), &update); err != nil {
+					t.Fatal(err)
+				}
+				if err := WriteMetadataToFile(path, &update); err == nil || !strings.Contains(err.Error(), "no existing text") {
+					t.Fatalf("expected missing text error, got %v", err)
+				}
+				after, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(before, after) {
+					t.Fatal("failed update changed the source EPUB")
+				}
+			})
+		}
 	}
 }
 
@@ -206,8 +468,8 @@ func TestWriteTextFieldRefinements(t *testing.T) {
 					t.Fatal(err)
 				}
 				expected := []MetadataValue{
-					{Value: "First", Refinements: []Meta{{Property: "custom:first", Value: "one"}}},
-					{Value: "Second", Refinements: []Meta{{Property: "custom:second", Value: "two"}}},
+					{Value: NewMetadataValue("First").Value, Refinements: []Meta{{Property: "custom:first", Value: "one"}}},
+					{Value: NewMetadataValue("Second").Value, Refinements: []Meta{{Property: "custom:second", Value: "two"}}},
 				}
 				if iteration == 1 {
 					expected[0], expected[1] = expected[1], expected[0]
@@ -219,7 +481,7 @@ func TestWriteTextFieldRefinements(t *testing.T) {
 					if len(value.Refinements) != 1 {
 						t.Fatalf("refinements did not round trip: %+v", got)
 					}
-					if value.Value != expected[i].Value ||
+					if value.String() != expected[i].String() ||
 						value.Refinements[0].Property != expected[i].Refinements[0].Property ||
 						value.Refinements[0].Value != expected[i].Refinements[0].Value {
 						t.Fatalf("refinement attached to wrong value: %+v", got)
@@ -253,8 +515,8 @@ func TestWriteStructuredFieldRefinements(t *testing.T) {
 		Contributor: []Author{{FullName: "Contributor", Refinements: refinement("contributor")}},
 		Date:        []Date{{Stamp: "2026-10-15", Refinements: refinement("date")}},
 		Meta:        []GenericMetadata{{Name: "vendor:new", Content: "Legacy", Refinements: refinement("legacy")}},
-		Series:      MetadataValue{Value: "Series", Refinements: refinement("series")},
-		SeriesIndex: MetadataValue{Value: "2", Refinements: refinement("index")},
+		Series:      MetadataValue{Value: seriesText("Series"), Refinements: refinement("series")},
+		SeriesIndex: MetadataValue{Value: seriesText("2"), Refinements: refinement("index")},
 	}
 	for iteration := 0; iteration < 2; iteration++ {
 		if err := WriteMetadataToFile(path, update); err != nil {
@@ -306,7 +568,7 @@ func TestWriteStructuredFieldRefinements(t *testing.T) {
 		}
 	}
 	// Updating just the index must retain the collection's custom refinements.
-	if err := WriteMetadataToFile(path, &Information{SeriesIndex: MetadataValue{Value: "3"}}); err != nil {
+	if err := WriteMetadataToFile(path, &Information{SeriesIndex: MetadataValue{Value: seriesText("3")}}); err != nil {
 		t.Fatal(err)
 	}
 	got := readWriteTestMetadata(t, path)
@@ -317,7 +579,7 @@ func TestWriteStructuredFieldRefinements(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = readWriteTestMetadata(t, path)
-	if got.Series.Value != "Series" || len(got.Series.Refinements) != 0 || got.SeriesIndex.Value != "3" {
+	if got.Series.String() != "Series" || len(got.Series.Refinements) != 0 || got.SeriesIndex.String() != "3" {
 		t.Fatal("clearing just series refinements changed the series or index values")
 	}
 }
@@ -389,23 +651,23 @@ func TestWriteMetadataUpdates(t *testing.T) {
 		{
 			name: "partial",
 			update: Information{
-				Title: []MetadataValue{{Value: `New <Title> & "more"`}}, Subject: []MetadataValue{},
+				Title: []MetadataValue{NewMetadataValue(`New <Title> & "more"`)}, Subject: []MetadataValue{},
 			},
 		},
 		{
 			name: "all fields",
 			update: Information{
 				Identifier: []Identifier{{Scheme: "ISBN", Value: "978-test"}},
-				Title:      []MetadataValue{{Value: "Title"}, {Value: "Another title"}}, SubTitle: []MetadataValue{{Value: "Subtitle"}},
-				Language: []MetadataValue{{Value: "es"}, {Value: "en"}}, Contributor: []Author{{FullName: "Translator", Role: "trl", FileAs: "Translator"}},
+				Title:      []MetadataValue{NewMetadataValue("Title"), NewMetadataValue("Another title")}, SubTitle: []MetadataValue{NewMetadataValue("Subtitle")},
+				Language: []MetadataValue{NewMetadataValue("es"), NewMetadataValue("en")}, Contributor: []Author{{FullName: "Translator", Role: "trl", FileAs: "Translator"}},
 				Creator:  []Author{{FullName: "New author", Role: "aut", FileAs: "Author, New"}},
 				Date:     []Date{{Stamp: "2026-10-15", Event: "publication"}},
-				Coverage: []MetadataValue{{Value: "Coverage"}}, Description: []MetadataValue{{Value: "Description"}},
-				Format: []MetadataValue{{Value: "Format"}}, Publisher: []MetadataValue{{Value: "Publisher"}},
-				Relation: []MetadataValue{{Value: "Relation"}}, Rights: []MetadataValue{{Value: "Rights"}},
-				Source: []MetadataValue{{Value: "Source"}}, Subject: []MetadataValue{{Value: "Subject"}}, Type: []MetadataValue{{Value: "Type"}},
+				Coverage: []MetadataValue{NewMetadataValue("Coverage")}, Description: []MetadataValue{NewMetadataValue("Description")},
+				Format: []MetadataValue{NewMetadataValue("Format")}, Publisher: []MetadataValue{NewMetadataValue("Publisher")},
+				Relation: []MetadataValue{NewMetadataValue("Relation")}, Rights: []MetadataValue{NewMetadataValue("Rights")},
+				Source: []MetadataValue{NewMetadataValue("Source")}, Subject: []MetadataValue{NewMetadataValue("Subject")}, Type: []MetadataValue{NewMetadataValue("Type")},
 				Meta:   []GenericMetadata{{Name: "vendor:new", Content: "new content"}},
-				Series: MetadataValue{Value: "New series"}, SeriesIndex: MetadataValue{Value: "2.5"},
+				Series: MetadataValue{Value: seriesText("New series")}, SeriesIndex: MetadataValue{Value: seriesText("2.5")},
 			},
 		},
 	}
@@ -423,8 +685,8 @@ func TestWriteMetadataUpdates(t *testing.T) {
 					want = &expected
 					if version == "2.0" {
 						want.Meta = append(append([]GenericMetadata(nil), want.Meta...),
-							GenericMetadata{Name: "calibre:series", Content: want.Series.Value},
-							GenericMetadata{Name: "calibre:series_index", Content: want.SeriesIndex.Value})
+							GenericMetadata{Name: "calibre:series", Content: want.Series.String()},
+							GenericMetadata{Name: "calibre:series_index", Content: want.SeriesIndex.String()})
 					}
 				}
 				before, err := zip.OpenReader(path)
@@ -517,7 +779,7 @@ func TestWriteMetadataUpdates(t *testing.T) {
 					t.Fatal(err)
 				}
 				info = readWriteTestMetadata(t, path)
-				if info.Series.Value != "" || info.SeriesIndex.Value != "" || len(info.SubTitle) != 0 || len(info.Meta) != 0 {
+				if info.Series.String() != "" || info.SeriesIndex.String() != "" || len(info.SubTitle) != 0 || len(info.Meta) != 0 {
 					t.Fatalf("clear failed: %+v", info)
 				}
 			})
@@ -534,18 +796,19 @@ func TestWriteMetadataFailuresPreserveOriginal(t *testing.T) {
 	}{
 		{"nil update", writeTestPackage, nil, nil},
 		{"remove primary identifier", writeTestPackage, &Information{Identifier: []Identifier{}}, nil},
-		{"malformed XML", "<package>", &Information{Title: []MetadataValue{{Value: "Title"}}}, nil},
-		{"missing metadata", `<package xmlns="http://www.idpf.org/2007/opf"/>`, &Information{Title: []MetadataValue{{Value: "Title"}}}, nil},
-		{"invalid XML character", writeTestPackage, &Information{Title: []MetadataValue{{Value: "bad\x00title"}}}, nil},
-		{"invalid UTF-8", writeTestPackage, &Information{Title: []MetadataValue{{Value: "bad\xfftitle"}}}, nil},
+		{"malformed XML", "<package>", &Information{Title: []MetadataValue{NewMetadataValue("Title")}}, nil},
+		{"missing metadata", `<package xmlns="http://www.idpf.org/2007/opf"/>`, &Information{Title: []MetadataValue{NewMetadataValue("Title")}}, nil},
+		{"invalid XML character", writeTestPackage, &Information{Title: []MetadataValue{NewMetadataValue("bad\x00title")}}, nil},
+		{"invalid UTF-8", writeTestPackage, &Information{Title: []MetadataValue{NewMetadataValue("bad\xfftitle")}}, nil},
 		{"invalid attribute", writeTestPackage, &Information{Creator: []Author{{FullName: "Author", FileAs: "\x00"}}}, nil},
 		{"unknown clear field", writeTestPackage, &Information{}, []string{"Unknown"}},
 		{"empty refinement property", writeTestPackage, &Information{Creator: []Author{{FullName: "Author", Refinements: []Meta{{Value: "Q42"}}}}}, nil},
 		{"duplicate refinement ID", writeTestPackage, &Information{Creator: []Author{{FullName: "Author", Refinements: []Meta{{ID: "primary", Property: "custom:author", Value: "Q42"}}}}}, nil},
 		{"invalid refinement text", writeTestPackage, &Information{Creator: []Author{{FullName: "Author", Refinements: []Meta{{Property: "custom:author", Value: "\x00"}}}}}, nil},
-		{"empty text refinement property", writeTestPackage, &Information{Title: []MetadataValue{{Value: "Title", Refinements: []Meta{{Property: " "}}}}}, nil},
+		{"empty text refinement property", writeTestPackage, &Information{Title: []MetadataValue{{Value: NewMetadataValue("Title").Value, Refinements: []Meta{{Property: " "}}}}}, nil},
 		{"controlled legacy series refinement", writeTestPackage, &Information{Meta: []GenericMetadata{{Name: "calibre:series", Content: "Series", Refinements: []Meta{{Property: "custom:id", Value: "id"}}}}}, nil},
 		{"refinement-only series without a name", strings.ReplaceAll(strings.ReplaceAll(writeTestPackage, "calibre:series", "vendor:unused"), "Old series", ""), &Information{Series: MetadataValue{Refinements: []Meta{{Property: "custom:series", Value: "id"}}}}, nil},
+		{"index without a series", strings.ReplaceAll(writeTestPackage, "calibre:series", "vendor:unused"), &Information{SeriesIndex: NewMetadataValue("2")}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := createWriteTestEPUB(t, strings.ReplaceAll(tc.pkg, "VERSION", "3.0"))
@@ -574,7 +837,7 @@ func TestWriteStandardRefinementProperties(t *testing.T) {
 			FullName: "Author", Role: "aut", FileAs: "Old file-as",
 			Refinements: []Meta{{Property: "role", Value: "edt"}, {Property: "file-as", Value: "New file-as"}},
 		}},
-		Title: []MetadataValue{{Value: "Title", Refinements: []Meta{{Property: "title-type", Value: "short"}}}},
+		Title: []MetadataValue{{Value: NewMetadataValue("Title").Value, Refinements: []Meta{{Property: "title-type", Value: "short"}}}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -596,7 +859,7 @@ func TestWriteAuthorRefinements(t *testing.T) {
 	if len(info.Creator[0].Refinements) != 1 || info.Creator[0].Refinements[0].Value != "Q1" {
 		t.Fatalf("existing custom refinement not read: %+v", info.Creator)
 	}
-	if err := WriteMetadataToFile(path, &Information{Publisher: []MetadataValue{{Value: "Publisher"}}}); err != nil {
+	if err := WriteMetadataToFile(path, &Information{Publisher: []MetadataValue{NewMetadataValue("Publisher")}}); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(readWriteTestMetadata(t, path).Creator, info.Creator) {
@@ -667,11 +930,11 @@ func TestWriteMetadataSeriesRefinements(t *testing.T) {
 <meta property="belongs-to-collection" id="other-collection">Other collection</meta>
 <meta property="collection-type" refines="#other-collection">set</meta>`, 1)
 	path := createWriteTestEPUB(t, pkg)
-	if err := WriteMetadataToFile(path, &Information{SeriesIndex: MetadataValue{Value: "4"}}); err != nil {
+	if err := WriteMetadataToFile(path, &Information{SeriesIndex: MetadataValue{Value: seriesText("4")}}); err != nil {
 		t.Fatal(err)
 	}
 	info := readWriteTestMetadata(t, path)
-	if info.Series.Value != "Old series" || info.SeriesIndex.Value != "4" {
+	if info.Series.String() != "Old series" || info.SeriesIndex.String() != "4" {
 		t.Fatalf("index-only update changed series: %+v", info)
 	}
 	p, err := GetPackageFromFile(path)
@@ -691,7 +954,7 @@ func TestWriteMetadataSeriesRefinements(t *testing.T) {
 		t.Fatal(err)
 	}
 	info = readWriteTestMetadata(t, path)
-	if info.Series.Value != "" || info.SeriesIndex.Value != "" {
+	if info.Series.String() != "" || info.SeriesIndex.String() != "" {
 		t.Fatalf("unrelated set treated as series after clearing: %+v", info)
 	}
 }
@@ -704,14 +967,21 @@ func TestWriteMetadataClearFields(t *testing.T) {
 		wantSeries string
 		wantIndex  string
 	}{
-		{name: "empty strings preserve series", wantSeries: "Old series", wantIndex: "1"},
+		{name: "omitted values preserve series", wantSeries: "Old series", wantIndex: "1"},
 		{
-			name: "clear index overrides update", update: Information{SeriesIndex: MetadataValue{Value: "9"}},
+			name: "empty series clears both values", update: Information{Series: NewMetadataValue("")},
+		},
+		{
+			name: "empty index preserves series", update: Information{SeriesIndex: NewMetadataValue("")},
+			wantSeries: "Old series",
+		},
+		{
+			name: "clear index overrides update", update: Information{SeriesIndex: MetadataValue{Value: seriesText("9")}},
 			clear: "SeriesIndex", wantSeries: "Old series",
 		},
 		{
 			name:   "clear series overrides update",
-			update: Information{Series: MetadataValue{Value: "Replacement"}, SeriesIndex: MetadataValue{Value: "9"}}, clear: "Series",
+			update: Information{Series: MetadataValue{Value: seriesText("Replacement")}, SeriesIndex: MetadataValue{Value: seriesText("9")}}, clear: "Series",
 		},
 	}
 	for _, version := range []string{"2.0", "3.0"} {
@@ -726,7 +996,7 @@ func TestWriteMetadataClearFields(t *testing.T) {
 					t.Fatal(err)
 				}
 				info := readWriteTestMetadata(t, path)
-				if info.Series.Value != tc.wantSeries || info.SeriesIndex.Value != tc.wantIndex {
+				if info.Series.String() != tc.wantSeries || info.SeriesIndex.String() != tc.wantIndex {
 					t.Fatalf("got series %q, index %q; want %q, %q",
 						info.Series, info.SeriesIndex, tc.wantSeries, tc.wantIndex)
 				}
@@ -738,7 +1008,7 @@ func TestWriteMetadataClearFields(t *testing.T) {
 func TestWriteMetadataModifiedAndIDs(t *testing.T) {
 	pkg := strings.ReplaceAll(writeTestPackage, "VERSION", "3.0")
 	path := createWriteTestEPUB(t, pkg)
-	if err := WriteMetadataToFile(path, &Information{Publisher: []MetadataValue{{Value: "New publisher"}}}); err != nil {
+	if err := WriteMetadataToFile(path, &Information{Publisher: []MetadataValue{NewMetadataValue("New publisher")}}); err != nil {
 		t.Fatal(err)
 	}
 	p, err := GetPackageFromFile(path)
@@ -806,11 +1076,11 @@ func TestWriteMetadataNoopAndPrefixedPackage(t *testing.T) {
 	if string(data) != pkg {
 		t.Fatal("empty update changed package XML")
 	}
-	if err := WriteMetadataToFile(path, &Information{Title: []MetadataValue{{Value: "New title"}}}); err != nil {
+	if err := WriteMetadataToFile(path, &Information{Title: []MetadataValue{NewMetadataValue("New title")}}); err != nil {
 		t.Fatal(err)
 	}
 	info := readWriteTestMetadata(t, path)
-	if !reflect.DeepEqual(info.Title, []MetadataValue{{Value: "New title"}}) {
+	if !reflect.DeepEqual(info.Title, []MetadataValue{NewMetadataValue("New title")}) {
 		t.Fatalf("prefixed package update failed: %+v", info)
 	}
 }
@@ -822,7 +1092,7 @@ func TestWriteMetadataRejectsSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := readWriteTestFile(t, path)
-	if err := WriteMetadataToFile(link, &Information{Title: []MetadataValue{{Value: "New"}}}); err == nil {
+	if err := WriteMetadataToFile(link, &Information{Title: []MetadataValue{NewMetadataValue("New")}}); err == nil {
 		t.Fatal("expected symlink error")
 	}
 	if !bytes.Equal(before, readWriteTestFile(t, path)) {
@@ -845,11 +1115,11 @@ func TestWriteMetadataExistingEPUBs(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := readWriteTestMetadata(t, path)
-			if err := WriteMetadataToFile(path, &Information{Title: []MetadataValue{{Value: "Updated title"}}}); err != nil {
+			if err := WriteMetadataToFile(path, &Information{Title: []MetadataValue{NewMetadataValue("Updated title")}}); err != nil {
 				t.Fatal(err)
 			}
 			after := readWriteTestMetadata(t, path)
-			before.Title = []MetadataValue{{Value: "Updated title"}}
+			before.Title = []MetadataValue{NewMetadataValue("Updated title")}
 			if !reflect.DeepEqual(after, before) {
 				t.Fatalf("unexpected metadata changes:\ngot: %+v\nwant: %+v", after, before)
 			}
