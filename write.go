@@ -136,7 +136,7 @@ type metadataChild struct {
 	subtitle   bool
 }
 
-type packageXML struct {
+type packageEditState struct {
 	children         []metadataChild
 	end              int
 	ids              map[string]bool
@@ -145,7 +145,7 @@ type packageXML struct {
 	namespaces       map[string]string
 }
 
-func (p *packageXML) addID(id string) error {
+func (p *packageEditState) addID(id string) error {
 	if p.ids[id] {
 		return fmt.Errorf("duplicate XML ID %q", id)
 	}
@@ -155,10 +155,10 @@ func (p *packageXML) addID(id string) error {
 
 // Byte offsets let us retain XML that the public package structs do not model,
 // including vendor extensions, namespace declarations, and EPUB 2 guides.
-func scanPackageXML(data []byte) (*packageXML, error) {
+func scanPackageXML(data []byte) (*packageEditState, error) {
 	d := xml.NewDecoder(bytes.NewReader(data))
 	d.Entity = xml.HTMLEntity
-	p := &packageXML{ids: make(map[string]bool), namespaces: make(map[string]string)}
+	p := &packageEditState{ids: make(map[string]bool), namespaces: make(map[string]string)}
 	depth, metadataDepth, end := 0, 0, -1
 	for {
 		start := int(d.InputOffset())

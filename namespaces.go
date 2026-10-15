@@ -91,7 +91,7 @@ func (n *xmlNamespaces) name(name xml.Name, attribute bool) xml.Name {
 	return xml.Name{Local: name.Local}
 }
 
-func (n *xmlNamespaces) declare(data []byte, source *packageXML, generatedLength int) ([]byte, error) {
+func (n *xmlNamespaces) declare(data []byte, source *packageEditState, generatedLength int) ([]byte, error) {
 	var declarations bytes.Buffer
 	for _, prefix := range sortedNamespacePrefixes(n.added) {
 		declarations.WriteString(` xmlns:` + prefix + `="`)

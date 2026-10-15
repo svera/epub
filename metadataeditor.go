@@ -10,7 +10,7 @@ import (
 
 // metadataEditor holds edit state, not another representation of the metadata.
 type metadataEditor struct {
-	source               *packageXML
+	source               *packageEditState
 	removed              []bool
 	elements             []xml.Token
 	epub3                bool
