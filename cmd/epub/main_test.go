@@ -101,7 +101,11 @@ func TestCLIWrite(t *testing.T) {
 				if err := os.WriteFile(path, data, 0600); err != nil {
 					t.Fatal(err)
 				}
-				out, err = run(`{"Title":[{"Value":"CLI title","Refinements":[{"Property":"alternate-script","Value":"Other script"}]}],"Subject":[]}`,
+				prefixes := ""
+				if mode == "refined" {
+					prefixes = `"Prefixes":{"cdr":"https://example.org/cdr/"},`
+				}
+				out, err = run(`{`+prefixes+`"Title":[{"Value":"CLI title","Refinements":[{"Property":"alternate-script","Value":"Other script"}]}],"Subject":[]}`,
 					"--write", "-", "--field", "title", path)
 				info, readErr := epub.GetMetadataFromFile(path)
 				if readErr != nil {
@@ -110,6 +114,9 @@ func TestCLIWrite(t *testing.T) {
 				if len(info.Title) != 1 || len(info.Title[0].Refinements) != 1 ||
 					info.Title[0].Refinements[0].Property != "alternate-script" {
 					t.Fatalf("CLI lost field refinements: %+v", info.Title)
+				}
+				if mode == "refined" && info.Prefixes["cdr"] != "https://example.org/cdr/" {
+					t.Fatal("CLI did not persist prefix declaration")
 				}
 			case "clear":
 				if err := epub.WriteMetadataToFile(path, &epub.Information{Series: epub.MetadataValue{Value: "Series"}, SeriesIndex: epub.MetadataValue{Value: "3"}}); err != nil {

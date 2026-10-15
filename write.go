@@ -278,6 +278,12 @@ func updatePackageMetadata(data []byte, u *Information, clear map[string]bool) (
 	if err != nil {
 		return nil, err
 	}
+	withPrefixes, err := updatePackagePrefixes(data, pkg, u.Prefixes)
+	if err != nil {
+		return nil, err
+	}
+	prefixesChanged := !bytes.Equal(data, withPrefixes)
+	data = withPrefixes
 	source, err := scanPackageXML(data)
 	if err != nil {
 		return nil, err
@@ -306,7 +312,7 @@ func updatePackageMetadata(data []byte, u *Information, clear map[string]bool) (
 	if err := editor.updateSeries(u, clear, pkg.Metadata.Meta); err != nil {
 		return nil, err
 	}
-	editor.refreshModifiedTime()
+	editor.refreshModifiedTime(prefixesChanged)
 	editor.removeRefinements()
 	updated, err := editor.apply(data)
 	if err != nil {

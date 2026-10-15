@@ -331,8 +331,8 @@ func (e *metadataEditor) updateSeries(u *Information, clear map[string]bool, met
 	return nil
 }
 
-func (e *metadataEditor) refreshModifiedTime() {
-	changed := len(e.elements) != 0
+func (e *metadataEditor) refreshModifiedTime(prefixesChanged bool) {
+	changed := prefixesChanged || len(e.elements) != 0
 	for _, remove := range e.removed {
 		changed = changed || remove
 	}

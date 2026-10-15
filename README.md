@@ -107,6 +107,10 @@ This is a Go API change: use `.Value` to access text and series values.
 
 ```go
 err := epub.WriteMetadataToFile("book.epub", &epub.Information{
+    Prefixes: map[string]string{
+        "myvocab": "https://example.org/vocabulary/",
+        "cdr": "https://example.org/cdr/",
+    },
     Title: []epub.MetadataValue{{
         Value: "A New Title",
         Refinements: []epub.Meta{{
@@ -127,8 +131,14 @@ err := epub.WriteMetadataToFile("book.epub", &epub.Information{
 
 The writer automatically sets `refines` to the corresponding field value's XML ID,
 reusing existing IDs by position or generating IDs for new values.
-Any supplied `Meta.Refines` is overridden. Custom vocabulary prefixes such as
-`cdr` and `myvocab` must already be declared in the package's `prefix` attribute.
+Any supplied `Meta.Refines` is overridden. Declare custom vocabulary prefixes
+through `Information.Prefixes`, a map from prefix names (without `:`) to absolute
+IRIs. The writer merges them into the EPUB 3 package's `prefix` attribute,
+preserving unrelated declarations. Repeating an identical mapping is a no-op;
+conflicting mappings, invalid names, and relative IRIs are rejected before the
+file is replaced. Omitted or empty maps leave existing declarations unchanged.
+Reading metadata returns the package's explicit declarations in `Prefixes`.
+Prefix updates require EPUB 3; EPUB 2 fallback properties need no declarations.
 Any nonempty property name is accepted, including standard properties.
 Explicit refinements override automatically generated properties of the same
 name (for example, `role` overrides `Author.Role`).
@@ -154,6 +164,10 @@ including a mixture in the same list:
 
 ```json
 {
+  "Prefixes": {
+    "myvocab": "https://example.org/vocabulary/",
+    "cdr": "https://example.org/cdr/"
+  },
   "Title": [
     {"Value":"A New Title","Refinements":[{"Property":"myvocab:catalogue_id","Value":"book-123"}]},
     "An Alternative Title"

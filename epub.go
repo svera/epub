@@ -122,7 +122,12 @@ func (e *Epub) Information() (*Information, error) {
 	if err != nil {
 		return nil, err
 	}
-	return getMeta(metadata), nil
+	info := getMeta(metadata)
+	info.Prefixes, err = parsePrefixes(opf.Prefix)
+	if err != nil {
+		return nil, err
+	}
+	return info, nil
 }
 
 // GetPackageFromFile reads an epub's Open Package Document from an epub  file.

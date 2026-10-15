@@ -55,6 +55,10 @@ func (v *MetadataValue) UnmarshalJSON(data []byte) error {
 // of Metadata to offer a more direct access to an Epub's metadata for simple
 // use cases.
 type Information struct {
+	// Prefixes maps EPUB 3 vocabulary prefixes to absolute IRIs. Writes merge
+	// declarations without replacing conflicting existing mappings.
+	Prefixes map[string]string `json:",omitempty"`
+
 	// Identifier contains an identifier associated with the given
 	// Rendition, such as a UUID, DOI or ISBN.
 	Identifier []Identifier
