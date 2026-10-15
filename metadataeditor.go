@@ -367,8 +367,8 @@ func (e *metadataEditor) removeRefinements() {
 	}
 }
 
-func (e *metadataEditor) apply(data []byte) ([]byte, error) {
-	generated, err := encodeMetadata(e.elements)
+func (e *metadataEditor) apply(data []byte, namespaces *xmlNamespaces) ([]byte, error) {
+	generated, err := encodeMetadata(e.elements, namespaces)
 	if err != nil {
 		return nil, err
 	}
@@ -390,5 +390,5 @@ func (e *metadataEditor) apply(data []byte) ([]byte, error) {
 		result.Write(generated)
 	}
 	result.Write(data[e.source.end:])
-	return result.Bytes(), nil
+	return namespaces.declare(result.Bytes(), e.source, len(generated))
 }

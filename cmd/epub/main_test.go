@@ -107,7 +107,8 @@ func TestCLIWrite(t *testing.T) {
 				}
 				title := `{"Value":"CLI title","Refinements":[{"Property":"alternate-script","Value":"Other script"}]}`
 				if mode == "attributes epub2" {
-					title = `{"Value":"CLI title","Attributes":[{"Name":{"Local":"catalogue_id"},"Value":"Q42"}]}`
+					prefixes = `"Namespaces":{"cdr":"urn:catalogue"},`
+					title = `{"Value":"CLI title","Attributes":[{"Name":{"Space":"urn:catalogue","Local":"catalogue_id"},"Value":"Q42"}]}`
 				}
 				out, err = run(`{`+prefixes+`"Title":[`+title+`],"Subject":[]}`,
 					"--write", "-", "--field", "title", path)
@@ -119,7 +120,8 @@ func TestCLIWrite(t *testing.T) {
 					info.Title[0].Refinements[0].Property != "alternate-script") {
 					t.Fatalf("CLI lost field refinements: %+v", info.Title)
 				}
-				if mode == "attributes epub2" && (len(info.Title[0].Attributes) != 1 || info.Title[0].Attributes[0].Value != "Q42") {
+				if mode == "attributes epub2" && (len(info.Title[0].Attributes) != 1 ||
+					info.Title[0].Attributes[0].Value != "Q42" || info.Title[0].Attributes[0].Name.Space != "urn:catalogue") {
 					t.Fatal("CLI lost custom XML attributes")
 				}
 				if mode == "refined" && info.Prefixes["cdr"] != "https://example.org/cdr/" {

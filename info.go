@@ -68,6 +68,11 @@ type Information struct {
 	// declarations without replacing conflicting existing mappings.
 	Prefixes map[string]string `json:",omitempty"`
 
+	// Namespaces maps preferred XML prefixes to namespace URIs. Writes add
+	// declarations on metadata and reuse inherited declarations in either EPUB version.
+	// This is a write option, not returned by Information.
+	Namespaces map[string]string `json:",omitempty"`
+
 	// Identifier contains an identifier associated with the given
 	// Rendition, such as a UUID, DOI or ISBN.
 	Identifier []Identifier

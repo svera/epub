@@ -133,9 +133,12 @@ type metadataChild struct {
 }
 
 type packageXML struct {
-	children []metadataChild
-	end      int
-	ids      map[string]bool
+	children         []metadataChild
+	end              int
+	ids              map[string]bool
+	metadataStartEnd int
+	metadataName     string
+	namespaces       map[string]string
 }
 
 func (p *packageXML) addID(id string) error {
@@ -151,7 +154,7 @@ func (p *packageXML) addID(id string) error {
 func scanPackageXML(data []byte) (*packageXML, error) {
 	d := xml.NewDecoder(bytes.NewReader(data))
 	d.Entity = xml.HTMLEntity
-	p := &packageXML{ids: make(map[string]bool)}
+	p := &packageXML{ids: make(map[string]bool), namespaces: make(map[string]string)}
 	depth, metadataDepth, end := 0, 0, -1
 	for {
 		start := int(d.InputOffset())
@@ -165,6 +168,15 @@ func scanPackageXML(data []byte) (*packageXML, error) {
 		switch t := token.(type) {
 		case xml.StartElement:
 			depth++
+			if depth == 1 || depth == 2 && t.Name == (xml.Name{Space: opfNamespace, Local: "metadata"}) {
+				for _, a := range t.Attr {
+					if a.Name.Space == "xmlns" {
+						p.namespaces[a.Name.Local] = a.Value
+					} else if a.Name == (xml.Name{Local: "xmlns"}) {
+						p.namespaces[""] = a.Value
+					}
+				}
+			}
 			for _, a := range t.Attr {
 				if a.Name == (xml.Name{Local: "id"}) {
 					if err := p.addID(a.Value); err != nil {
@@ -177,6 +189,10 @@ func scanPackageXML(data []byte) (*packageXML, error) {
 					return nil, fmt.Errorf("multiple metadata elements")
 				}
 				metadataDepth = depth
+				p.metadataStartEnd = int(d.InputOffset())
+				tag := data[start:p.metadataStartEnd]
+				p.metadataName = strings.Fields(string(tag[1:]))[0]
+				p.metadataName = strings.TrimRight(p.metadataName, "/>")
 			} else if metadataDepth != 0 && depth == metadataDepth+1 && end == -1 {
 				child := metadataChild{start: start, name: t.Name}
 				for _, a := range t.Attr {
@@ -214,7 +230,7 @@ func scanPackageXML(data []byte) (*packageXML, error) {
 	return p, nil
 }
 
-func encodeMetadata(tokens []xml.Token) ([]byte, error) {
+func encodeMetadata(tokens []xml.Token, namespaces *xmlNamespaces) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := xml.NewEncoder(&buf)
 	// addElement always emits a start, text, and matching end token.
@@ -245,6 +261,11 @@ func encodeMetadata(tokens []xml.Token) ([]byte, error) {
 				return nil, fmt.Errorf("invalid XML text in %s attribute %s", start.Name.Local, a.Name.Local)
 			}
 		}
+		start.Name = namespaces.name(start.Name, false)
+		start.Attr = append([]xml.Attr(nil), start.Attr...)
+		for j := range start.Attr {
+			start.Attr[j].Name = namespaces.name(start.Attr[j].Name, true)
+		}
 		for _, token := range []xml.Token{start, value, start.End()} {
 			if err := enc.EncodeToken(token); err != nil {
 				return nil, err
@@ -272,6 +293,10 @@ func updatePackageMetadata(data []byte, u *Information, clear map[string]bool) (
 	if err != nil {
 		return nil, err
 	}
+	namespaces, err := newXMLNamespaces(source.namespaces, u.Namespaces)
+	if err != nil {
+		return nil, err
+	}
 	children := source.children
 	markSubtitles(children, pkg.Metadata.Meta)
 	editor := metadataEditor{
@@ -292,9 +317,9 @@ func updatePackageMetadata(data []byte, u *Information, clear map[string]bool) (
 	if err := editor.updateSeries(u, clear, pkg.Metadata.Meta); err != nil {
 		return nil, err
 	}
-	editor.refreshModifiedTime(prefixesChanged)
+	editor.refreshModifiedTime(prefixesChanged || len(namespaces.added) != 0)
 	editor.removeRefinements()
-	updated, err := editor.apply(data)
+	updated, err := editor.apply(data, namespaces)
 	if err != nil {
 		return nil, err
 	}

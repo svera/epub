@@ -226,8 +226,41 @@ For series, an omitted value with nil `Attributes` preserves existing attributes
 an explicit empty list clears them without changing the series value.
 
 For namespaced attributes, set `xml.Name.Space` to the namespace URI and `Local`
-to the local name, not a colon-qualified name. Namespace declarations are generated
-automatically; `Information.Prefixes` only declares EPUB 3 property vocabularies.
+to the local name, not a colon-qualified name. The writer reuses namespace
+declarations inherited from `<package>` and `<metadata>`. Missing declarations
+are added once on `<metadata>`, not repeated on individual values.
+
+Use `Information.Namespaces` to choose XML prefixes explicitly:
+
+```go
+const vocab = "https://github.com/svera/coreander/vocab/"
+err := epub.WriteMetadataToFile("book.epub", &epub.Information{
+    Namespaces: map[string]string{"cdr": vocab},
+    Creator: []epub.Author{{
+        FullName: "Isaac Asimov",
+        Role: "aut",
+        FileAs: "Asimov, Isaac",
+        Attributes: []xml.Attr{
+            {Name: xml.Name{Space: vocab, Local: "wd_id"}, Value: "Q34981"},
+        },
+    }},
+})
+```
+
+This declares `xmlns:cdr` on `<metadata>` and writes `cdr:wd_id` on the creator.
+Inherited `dc` and `opf` bindings are reused without redeclaration on the creator.
+This works in EPUB 2 and EPUB 3; EPUB 3 still writes role/file-as as native
+refinements rather than OPF attributes.
+
+`Namespaces` is a write option (also accepted in CLI JSON), not returned when
+reading metadata. Existing declarations are preserved automatically. Prefixes
+must be nonempty XML names and URIs must be absolute; reserved names and conflicting
+inherited bindings are rejected. An identical mapping is a no-op. When multiple
+preferred prefixes name the same URI, the alphabetically first is used.
+Omitting `Namespaces` reuses existing bindings or generates a prefix when needed.
+
+XML namespace declarations are separate from `Information.Prefixes`, which only
+declares EPUB 3 property vocabularies in the package's `prefix` attribute.
 Invalid names, duplicate attributes, and invalid XML characters are rejected.
 Do not use custom attributes to override managed fields such as `id` or
 `opf:role`; use their existing API fields instead.

@@ -48,7 +48,11 @@ func TestEncodeMetadataRejectsInvalidElements(t *testing.T) {
 		{start, xml.CharData("text"), xml.EndElement{Name: xml.Name{Local: "other"}}},
 		{start, xml.CharData("\x00"), start.End()},
 	} {
-		if _, err := encodeMetadata(tokens); err == nil {
+		namespaces, err := newXMLNamespaces(nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := encodeMetadata(tokens, namespaces); err == nil {
 			t.Fatalf("accepted invalid metadata tokens: %+v", tokens)
 		}
 	}
