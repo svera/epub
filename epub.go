@@ -118,11 +118,7 @@ func (e *Epub) Information() (*Information, error) {
 		return nil, err
 	}
 
-	metadata, err := expandLegacyRefinements(opf.Metadata)
-	if err != nil {
-		return nil, err
-	}
-	info := getMeta(metadata)
+	info := getMeta(opf.Metadata)
 	info.Prefixes, err = parsePrefixes(opf.Prefix)
 	if err != nil {
 		return nil, err

@@ -70,7 +70,7 @@ func TestCLIWrite(t *testing.T) {
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
-	for _, mode := range []string{"file", "stdin", "refined", "refined epub2", "invalid", "multiple", "missing", "clear", "invalid clear", "clear without write"} {
+	for _, mode := range []string{"file", "stdin", "refined", "attributes epub2", "invalid", "multiple", "missing", "clear", "invalid clear", "clear without write"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "book.epub")
@@ -89,9 +89,9 @@ func TestCLIWrite(t *testing.T) {
 				out, err = run("", "--write", jsonPath, "--field", "title", path)
 			case "stdin":
 				out, err = run(update, "--write", "-", "--field", "title", path)
-			case "refined", "refined epub2":
+			case "refined", "attributes epub2":
 				fixture := "../../testdata/Row-Your-Boat-3.0.epub"
-				if mode == "refined epub2" {
+				if mode == "attributes epub2" {
 					fixture = "../../testdata/Row-Your-Boat-2.0.epub"
 				}
 				data, readErr := os.ReadFile(fixture)
@@ -105,15 +105,22 @@ func TestCLIWrite(t *testing.T) {
 				if mode == "refined" {
 					prefixes = `"Prefixes":{"cdr":"https://example.org/cdr/"},`
 				}
-				out, err = run(`{`+prefixes+`"Title":[{"Value":"CLI title","Refinements":[{"Property":"alternate-script","Value":"Other script"}]}],"Subject":[]}`,
+				title := `{"Value":"CLI title","Refinements":[{"Property":"alternate-script","Value":"Other script"}]}`
+				if mode == "attributes epub2" {
+					title = `{"Value":"CLI title","Attributes":[{"Name":{"Local":"catalogue_id"},"Value":"Q42"}]}`
+				}
+				out, err = run(`{`+prefixes+`"Title":[`+title+`],"Subject":[]}`,
 					"--write", "-", "--field", "title", path)
 				info, readErr := epub.GetMetadataFromFile(path)
 				if readErr != nil {
 					t.Fatal(readErr)
 				}
-				if len(info.Title) != 1 || len(info.Title[0].Refinements) != 1 ||
-					info.Title[0].Refinements[0].Property != "alternate-script" {
+				if mode == "refined" && (len(info.Title) != 1 || len(info.Title[0].Refinements) != 1 ||
+					info.Title[0].Refinements[0].Property != "alternate-script") {
 					t.Fatalf("CLI lost field refinements: %+v", info.Title)
+				}
+				if mode == "attributes epub2" && (len(info.Title[0].Attributes) != 1 || info.Title[0].Attributes[0].Value != "Q42") {
+					t.Fatal("CLI lost custom XML attributes")
 				}
 				if mode == "refined" && info.Prefixes["cdr"] != "https://example.org/cdr/" {
 					t.Fatal("CLI did not persist prefix declaration")

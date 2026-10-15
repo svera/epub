@@ -56,7 +56,7 @@ func updatePackagePrefixes(data []byte, pkg *PackageDocument, additions map[stri
 		return data, nil
 	}
 	if !strings.HasPrefix(pkg.Version, "3") {
-		return nil, fmt.Errorf("package prefix declarations require EPUB 3; EPUB 2 fallback properties do not need them")
+		return nil, fmt.Errorf("package prefix declarations require EPUB 3; custom EPUB 2 attributes do not need them")
 	}
 	existing, err := parsePrefixes(pkg.Prefix)
 	if err != nil {

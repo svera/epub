@@ -48,7 +48,7 @@ func TestEncodeMetadataRejectsInvalidElements(t *testing.T) {
 		{start, xml.CharData("text"), xml.EndElement{Name: xml.Name{Local: "other"}}},
 		{start, xml.CharData("\x00"), start.End()},
 	} {
-		if _, err := encodeMetadata(tokens, false); err == nil {
+		if _, err := encodeMetadata(tokens); err == nil {
 			t.Fatalf("accepted invalid metadata tokens: %+v", tokens)
 		}
 	}
@@ -89,6 +89,8 @@ func TestMetadataValueJSON(t *testing.T) {
 		`"Plain"`,
 		`{"Value":"Refined","Refinements":[{"Property":"custom:any_name","Value":"Q42"}]}`,
 		`{"Value":"","Refinements":[]}`,
+		`{"Value":"Attributed","Attributes":[{"Name":{"Local":"wd_id"},"Value":"Q42"}]}`,
+		`{"Value":"","Refinements":null,"Attributes":[]}`,
 	} {
 		var value MetadataValue
 		if err := json.Unmarshal([]byte(input), &value); err != nil {

@@ -22,8 +22,8 @@ const (
 // Non-nil empty slices clear fields. clearFields accepts "Series" and "SeriesIndex" to explicitly
 // clear those string fields, overriding any supplied values.
 // Meta replaces legacy name/content metadata except Calibre series entries.
-// Refinements automatically target each value's XML ID. EPUB 3 uses native meta
-// properties; EPUB 2 uses JSON entries named epub:refinement.
+// Refinements automatically target each value's XML ID and require EPUB 3.
+// Attributes writes custom XML attributes directly in either EPUB version.
 // Other metadata, package content, and ZIP entries are preserved. The original
 // file is replaced by a completed temporary archive in the same directory.
 // Existing Epub readers must be reopened to see the changes.
@@ -179,7 +179,6 @@ func scanPackageXML(data []byte) (*packageXML, error) {
 				metadataDepth = depth
 			} else if metadataDepth != 0 && depth == metadataDepth+1 && end == -1 {
 				child := metadataChild{start: start, name: t.Name}
-				var content string
 				for _, a := range t.Attr {
 					if a.Name.Space != "" {
 						continue
@@ -193,21 +192,7 @@ func scanPackageXML(data []byte) (*packageXML, error) {
 						child.property = a.Value
 					case "name":
 						child.legacyName = a.Value
-					case "content":
-						content = a.Value
 					}
-				}
-				if child.name == (xml.Name{Space: opfNamespace, Local: "meta"}) && child.legacyName == legacyRefinementName {
-					m, err := decodeLegacyRefinement(content)
-					if err != nil {
-						return nil, err
-					}
-					if m.ID != "" && m.ID != child.id {
-						if err := p.addID(m.ID); err != nil {
-							return nil, err
-						}
-					}
-					child.id, child.refines, child.property = m.ID, m.Refines, m.Property
 				}
 				p.children = append(p.children, child)
 			}
@@ -229,7 +214,7 @@ func scanPackageXML(data []byte) (*packageXML, error) {
 	return p, nil
 }
 
-func encodeMetadata(tokens []xml.Token, epub3 bool) ([]byte, error) {
+func encodeMetadata(tokens []xml.Token) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := xml.NewEncoder(&buf)
 	// addElement always emits a start, text, and matching end token.
@@ -246,20 +231,19 @@ func encodeMetadata(tokens []xml.Token, epub3 bool) ([]byte, error) {
 		if !validXMLText(string(value)) {
 			return nil, fmt.Errorf("invalid XML text in metadata")
 		}
-		isProperty := false
+		seen := make(map[xml.Name]bool)
 		for _, a := range start.Attr {
-			if !validXMLText(a.Value) {
+			if !vocabularyPrefix.MatchString(a.Name.Local) || a.Name.Local == "xmlns" ||
+				a.Name.Space == "xmlns" || a.Name.Space == "http://www.w3.org/2000/xmlns/" {
+				return nil, fmt.Errorf("invalid metadata attribute name %q", a.Name.Local)
+			}
+			if seen[a.Name] {
+				return nil, fmt.Errorf("duplicate metadata attribute %q", a.Name.Local)
+			}
+			seen[a.Name] = true
+			if !validXMLText(a.Value) || !validXMLText(a.Name.Space) {
 				return nil, fmt.Errorf("invalid XML text in %s attribute %s", start.Name.Local, a.Name.Local)
 			}
-			isProperty = isProperty || a.Name.Local == "property"
-		}
-		if !epub3 && isProperty && start.Name == (xml.Name{Space: opfNamespace, Local: "meta"}) {
-			var err error
-			start, err = legacyRefinementElement(start, value)
-			if err != nil {
-				return nil, err
-			}
-			value = nil
 		}
 		for _, token := range []xml.Token{start, value, start.End()} {
 			if err := enc.EncodeToken(token); err != nil {
@@ -285,10 +269,6 @@ func updatePackageMetadata(data []byte, u *Information, clear map[string]bool) (
 	prefixesChanged := !bytes.Equal(data, withPrefixes)
 	data = withPrefixes
 	source, err := scanPackageXML(data)
-	if err != nil {
-		return nil, err
-	}
-	pkg.Metadata, err = expandLegacyRefinements(pkg.Metadata)
 	if err != nil {
 		return nil, err
 	}

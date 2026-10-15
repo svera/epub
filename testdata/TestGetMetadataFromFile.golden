@@ -149,7 +149,19 @@
       "Alice's Adventures in Wonderland"
     ],
     "Language": [
-      "en"
+      {
+        "Value": "en",
+        "Refinements": null,
+        "Attributes": [
+          {
+            "Name": {
+              "Space": "http://www.w3.org/2001/XMLSchema-instance",
+              "Local": "type"
+            },
+            "Value": "dcterms:RFC4646"
+          }
+        ]
+      }
     ],
     "Creator": [
       {
@@ -189,7 +201,19 @@
       "Les Mémoires d'un âne."
     ],
     "Language": [
-      "fr"
+      {
+        "Value": "fr",
+        "Refinements": null,
+        "Attributes": [
+          {
+            "Name": {
+              "Space": "http://www.w3.org/2001/XMLSchema-instance",
+              "Local": "type"
+            },
+            "Value": "dcterms:RFC4646"
+          }
+        ]
+      }
     ],
     "Creator": [
       {
@@ -229,7 +253,19 @@
       "The Adventures of Sherlock Holmes"
     ],
     "Language": [
-      "en"
+      {
+        "Value": "en",
+        "Refinements": null,
+        "Attributes": [
+          {
+            "Name": {
+              "Space": "http://www.w3.org/2001/XMLSchema-instance",
+              "Local": "type"
+            },
+            "Value": "dcterms:RFC4646"
+          }
+        ]
+      }
     ],
     "Creator": [
       {
@@ -271,7 +307,19 @@
       "西遊記"
     ],
     "Language": [
-      "zh"
+      {
+        "Value": "zh",
+        "Refinements": null,
+        "Attributes": [
+          {
+            "Name": {
+              "Space": "http://www.w3.org/2001/XMLSchema-instance",
+              "Local": "type"
+            },
+            "Value": "dcterms:RFC4646"
+          }
+        ]
+      }
     ],
     "Creator": [
       {
@@ -314,7 +362,19 @@
       "Histoire de Pierre Lapin"
     ],
     "Language": [
-      "fr"
+      {
+        "Value": "fr",
+        "Refinements": null,
+        "Attributes": [
+          {
+            "Name": {
+              "Space": "http://www.w3.org/2001/XMLSchema-instance",
+              "Local": "type"
+            },
+            "Value": "dcterms:RFC4646"
+          }
+        ]
+      }
     ],
     "Contributor": [
       {
@@ -372,7 +432,19 @@
       "Voyage au Centre de la Terre"
     ],
     "Language": [
-      "fr"
+      {
+        "Value": "fr",
+        "Refinements": null,
+        "Attributes": [
+          {
+            "Name": {
+              "Space": "http://www.w3.org/2001/XMLSchema-instance",
+              "Local": "type"
+            },
+            "Value": "dcterms:RFC4646"
+          }
+        ]
+      }
     ],
     "Creator": [
       {
@@ -415,7 +487,19 @@
       "Aventures de Baron de Münchausen"
     ],
     "Language": [
-      "fr"
+      {
+        "Value": "fr",
+        "Refinements": null,
+        "Attributes": [
+          {
+            "Name": {
+              "Space": "http://www.w3.org/2001/XMLSchema-instance",
+              "Local": "type"
+            },
+            "Value": "dcterms:RFC4646"
+          }
+        ]
+      }
     ],
     "Contributor": [
       {
@@ -481,7 +565,19 @@
       "Vingt mille lieues sous les mers"
     ],
     "Language": [
-      "fr"
+      {
+        "Value": "fr",
+        "Refinements": null,
+        "Attributes": [
+          {
+            "Name": {
+              "Space": "http://www.w3.org/2001/XMLSchema-instance",
+              "Local": "type"
+            },
+            "Value": "dcterms:RFC4646"
+          }
+        ]
+      }
     ],
     "Contributor": [
       {

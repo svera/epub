@@ -138,12 +138,12 @@ preserving unrelated declarations. Repeating an identical mapping is a no-op;
 conflicting mappings, invalid names, and relative IRIs are rejected before the
 file is replaced. Omitted or empty maps leave existing declarations unchanged.
 Reading metadata returns the package's explicit declarations in `Prefixes`.
-Prefix updates require EPUB 3; EPUB 2 fallback properties need no declarations.
+Prefix updates require EPUB 3.
 Any nonempty property name is accepted, including standard properties.
 Explicit refinements override automatically generated properties of the same
 name (for example, `role` overrides `Author.Role`).
-Empty properties are rejected. EPUB 3 uses native refinements; EPUB 2 uses the
-legacy fallback described below.
+Empty properties are rejected. Explicit refinements require EPUB 3; for custom
+EPUB 2 attributes, use `Attributes` as described below.
 Optional `Meta` attributes (`ID`, `Scheme`, `Lang`, and `Dir`) are supported;
 IDs must be unique in the package.
 
@@ -178,36 +178,66 @@ including a mixture in the same list:
 }
 ```
 
-Text values with nil refinements are still emitted as JSON strings. Values with
-explicit refinement lists (including empty lists) are emitted as objects.
+Text values with nil refinements and attributes are still emitted as JSON strings.
+Values with explicit refinement or attribute lists (including empty lists) are
+emitted as objects.
 Existing plain-string JSON update files remain accepted.
 
-#### EPUB 2 refinement fallback
+#### Custom XML attributes (EPUB 2 and EPUB 3)
 
-The same attached-refinement API works in EPUB 2 without upgrading the file.
-Each refinement is stored as a legacy meta entry whose `content` is a JSON
-serialization of the existing `Meta` type, including its automatic `Refines` target:
+Use `Attributes []xml.Attr` to attach custom attributes directly to any metadata
+value, including authors, titles, identifiers, dates, legacy meta entries, and
+series values. For example, matching a Sigil-style author attribute:
 
-```xml
-<meta name="epub:refinement"
-      content="{&quot;Property&quot;:&quot;cdr:wd_id&quot;,&quot;Refines&quot;:&quot;#author-1&quot;,&quot;Value&quot;:&quot;Q42&quot;}"/>
+```go
+err := epub.WriteMetadataToFile("book.epub", &epub.Information{
+    Creator: []epub.Author{{
+        FullName: "Horacio",
+        Role: "aut",
+        Attributes: []xml.Attr{ // import "encoding/xml"
+            {Name: xml.Name{Local: "wd_id"}, Value: "Q6197"},
+        },
+    }},
+})
 ```
 
-The full JSON also includes the remaining `Meta` fields. If a refinement has an
-`ID`, the fallback element carries that ID as well.
-`epub:refinement` is reserved: add properties through field `Refinements`, not
-through `Information.Meta`. The reader reconstructs the attached refinements
-and hides these transport entries from `Information.Meta`; `Package()` still
-exposes the actual legacy entries.
+This writes the attribute on the creator itself (alongside its managed ID and
+role), not in a wrapper:
 
-Replacing or clearing a field removes its old fallback entries, while omitted
-fields retain theirs. Series and index fallback properties target their respective
-Calibre meta entries. Malformed fallback data returns an error on read or write;
-a failed write leaves the original file unchanged.
+```xml
+<dc:creator wd_id="Q6197" ...>Horacio</dc:creator>
+```
 
-This is a library convention, not native EPUB 2 refinement support. Other EPUB
-readers may preserve these entries but will not necessarily interpret them.
-The CLI chooses the fallback automatically for EPUB 2 input files.
+The CLI accepts the same attributes in JSON:
+
+```json
+{
+  "Creator": [{
+    "FullName": "Horacio",
+    "Role": "aut",
+    "Attributes": [{"Name": {"Local": "wd_id"}, "Value": "Q6197"}]
+  }]
+}
+```
+
+Attributes are returned when reading metadata. Updating a value replaces its
+attributes; include any you want to keep. Omitting a field preserves it.
+For series, an omitted value with nil `Attributes` preserves existing attributes;
+an explicit empty list clears them without changing the series value.
+
+For namespaced attributes, set `xml.Name.Space` to the namespace URI and `Local`
+to the local name, not a colon-qualified name. Namespace declarations are generated
+automatically; `Information.Prefixes` only declares EPUB 3 property vocabularies.
+Invalid names, duplicate attributes, and invalid XML characters are rejected.
+Do not use custom attributes to override managed fields such as `id` or
+`opf:role`; use their existing API fields instead.
+
+Direct custom attributes are not EPUB 3 refinements. Sigil accepting them does
+not guarantee EPUB validation or support in other readers.
+The writer no longer generates JSON `epub:refinement` entries, nor does the reader
+interpret them. Existing entries are left as ordinary `Information.Meta`
+values; to remove them, write that list back with those entries excluded
+(or use an empty list to clear all non-series legacy entries).
 
 The writer copies other ZIP entries without recompression, preserves package XML
 outside the updated metadata, and replaces the original file only after completing

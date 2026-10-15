@@ -18,6 +18,9 @@ type metadataEditor struct {
 
 func (e *metadataEditor) prepareRefinements(groups [][]Meta) error {
 	for _, values := range groups {
+		if len(values) != 0 && !e.epub3 {
+			return fmt.Errorf("metadata refinements require EPUB 3; use Attributes for custom EPUB 2 attributes")
+		}
 		for _, m := range values {
 			if strings.TrimSpace(m.Property) == "" {
 				return fmt.Errorf("metadata refinement requires a property")
@@ -49,7 +52,7 @@ func attr(name, value string) xml.Attr {
 	return xml.Attr{Name: xml.Name{Local: name}, Value: value}
 }
 
-func (e *metadataEditor) addMeta(id, property, refines, value string) {
+func (e *metadataEditor) addMeta(id, property, refines, value string, attributes ...xml.Attr) {
 	attrs := []xml.Attr{attr("property", property)}
 	if id != "" {
 		attrs = append(attrs, attr("id", id))
@@ -57,7 +60,7 @@ func (e *metadataEditor) addMeta(id, property, refines, value string) {
 	if refines != "" {
 		attrs = append(attrs, attr("refines", "#"+refines))
 	}
-	e.addElement(opfNamespace, "meta", value, attrs...)
+	e.addElement(opfNamespace, "meta", value, append(attrs, attributes...)...)
 }
 
 func (e *metadataEditor) replace(name string, subtitle bool) []string {
@@ -99,7 +102,7 @@ func (e *metadataEditor) updateTextFields(u *Information) {
 		ids := e.replace(f.name, f.subtitle)
 		for i, value := range f.values {
 			id := e.elementID(ids, i)
-			e.addElement(dcNamespace, f.name, value.Value, attr("id", id))
+			e.addElement(dcNamespace, f.name, value.Value, append([]xml.Attr{attr("id", id)}, value.Attributes...)...)
 			e.addRefinements(id, value.Refinements)
 			if f.subtitle && !hasProperty(value.Refinements, "title-type") {
 				e.addMeta("", "title-type", id, "subtitle")
@@ -125,7 +128,7 @@ func (e *metadataEditor) updateIdentifiers(values []Identifier, primaryID string
 			if value.Scheme != "" {
 				attrs = append(attrs, xml.Attr{Name: xml.Name{Space: opfNamespace, Local: "scheme"}, Value: value.Scheme})
 			}
-			e.addElement(dcNamespace, "identifier", value.Value, attrs...)
+			e.addElement(dcNamespace, "identifier", value.Value, append(attrs, value.Attributes...)...)
 			e.addRefinements(id, value.Refinements)
 		}
 	}
@@ -149,7 +152,7 @@ func (e *metadataEditor) updateAuthors(name string, values []Author) {
 				attrs = append(attrs, xml.Attr{Name: xml.Name{Space: opfNamespace, Local: v.name}, Value: v.value})
 			}
 		}
-		e.addElement(dcNamespace, name, a.FullName, attrs...)
+		e.addElement(dcNamespace, name, a.FullName, append(attrs, a.Attributes...)...)
 		e.addRefinements(id, a.Refinements)
 	}
 }
@@ -165,7 +168,7 @@ func (e *metadataEditor) addRefinements(targetID string, values []Meta) {
 				attrs = append(attrs, a)
 			}
 		}
-		e.addElement(opfNamespace, "meta", m.Value, attrs...)
+		e.addElement(opfNamespace, "meta", m.Value, append(attrs, m.Attributes...)...)
 	}
 }
 
@@ -187,7 +190,7 @@ func (e *metadataEditor) updateDates(values []Date) {
 			if value.Event != "" {
 				attrs = append(attrs, xml.Attr{Name: xml.Name{Space: opfNamespace, Local: "event"}, Value: value.Event})
 			}
-			e.addElement(dcNamespace, "date", value.Stamp, attrs...)
+			e.addElement(dcNamespace, "date", value.Stamp, append(attrs, value.Attributes...)...)
 			e.addRefinements(id, value.Refinements)
 		}
 	}
@@ -201,14 +204,11 @@ func (e *metadataEditor) updateLegacyMetadata(values []GenericMetadata) error {
 	if values != nil {
 		for i, c := range e.source.children {
 			if c.name == (xml.Name{Space: opfNamespace, Local: "meta"}) && c.legacyName != "" &&
-				c.legacyName != legacyRefinementName && !isSeries(c.legacyName) {
+				!isSeries(c.legacyName) {
 				e.removed[i] = true
 			}
 		}
 		for _, value := range values {
-			if value.Name == legacyRefinementName {
-				return fmt.Errorf("%s is reserved; use attached Refinements instead", legacyRefinementName)
-			}
 			if isSeries(value.Name) {
 				if len(value.Refinements) != 0 {
 					return fmt.Errorf("use Series or SeriesIndex to refine %q", value.Name)
@@ -221,7 +221,7 @@ func (e *metadataEditor) updateLegacyMetadata(values []GenericMetadata) error {
 				id = e.newID()
 				attrs = append(attrs, attr("id", id))
 			}
-			e.addElement(opfNamespace, "meta", "", attrs...)
+			e.addElement(opfNamespace, "meta", "", append(attrs, value.Attributes...)...)
 			e.addRefinements(id, value.Refinements)
 		}
 	}
@@ -230,12 +230,20 @@ func (e *metadataEditor) updateLegacyMetadata(values []GenericMetadata) error {
 
 func (e *metadataEditor) updateSeries(u *Information, clear map[string]bool, meta []MetaLegacy) error {
 	if u.Series.Value == "" && u.SeriesIndex.Value == "" && u.Series.Refinements == nil &&
-		u.SeriesIndex.Refinements == nil && !clear["Series"] && !clear["SeriesIndex"] {
+		u.SeriesIndex.Refinements == nil && u.Series.Attributes == nil && u.SeriesIndex.Attributes == nil &&
+		!clear["Series"] && !clear["SeriesIndex"] {
 		return nil
 	}
 	series, index := getSeries(meta)
 	oldSeries, oldIndex := seriesValues(meta)
 	seriesRefinements, indexRefinements := u.Series.Refinements, u.SeriesIndex.Refinements
+	seriesAttributes, indexAttributes := u.Series.Attributes, u.SeriesIndex.Attributes
+	if u.Series.Value == "" && seriesAttributes == nil {
+		seriesAttributes = oldSeries.Attributes
+	}
+	if u.SeriesIndex.Value == "" && indexAttributes == nil {
+		indexAttributes = oldIndex.Attributes
+	}
 	if u.Series.Value == "" && seriesRefinements == nil {
 		seriesRefinements = oldSeries.Refinements
 	}
@@ -264,14 +272,15 @@ func (e *metadataEditor) updateSeries(u *Information, clear map[string]bool, met
 	if series == "" && index != "" {
 		return fmt.Errorf("series index requires a series name")
 	}
-	if !clear["Series"] && series == "" && len(u.Series.Refinements) != 0 {
-		return fmt.Errorf("series refinements require a series name")
+	if !clear["Series"] && series == "" && (len(u.Series.Refinements) != 0 || len(u.Series.Attributes) != 0) {
+		return fmt.Errorf("series refinements or attributes require a series name")
 	}
-	if !clear["Series"] && !clear["SeriesIndex"] && index == "" && len(u.SeriesIndex.Refinements) != 0 {
-		return fmt.Errorf("series index refinements require an index")
+	if !clear["Series"] && !clear["SeriesIndex"] && index == "" && (len(u.SeriesIndex.Refinements) != 0 || len(u.SeriesIndex.Attributes) != 0) {
+		return fmt.Errorf("series index refinements or attributes require an index")
 	}
-	if !clear["Series"] && hasProperty(seriesRefinements, "group-position") && len(indexRefinements) != 0 {
-		return fmt.Errorf("set SeriesIndex instead of a group-position refinement when refining the index")
+	if !clear["Series"] && hasProperty(seriesRefinements, "group-position") &&
+		(len(indexRefinements) != 0 || len(indexAttributes) != 0) {
+		return fmt.Errorf("set SeriesIndex instead of a group-position refinement when refining the index or adding attributes")
 	}
 	collectionID := ""
 	collectionFound := false
@@ -294,7 +303,7 @@ func (e *metadataEditor) updateSeries(u *Information, clear map[string]bool, met
 			if collectionID == "" {
 				collectionID = e.newID()
 			}
-			e.addMeta(collectionID, "belongs-to-collection", "", series)
+			e.addMeta(collectionID, "belongs-to-collection", "", series, seriesAttributes...)
 			e.addRefinements(collectionID, seriesRefinements)
 			if !hasProperty(seriesRefinements, "collection-type") {
 				e.addMeta("", "collection-type", collectionID, "series")
@@ -305,7 +314,7 @@ func (e *metadataEditor) updateSeries(u *Information, clear map[string]bool, met
 					indexID = e.newID()
 				}
 				if !hasProperty(seriesRefinements, "group-position") {
-					e.addMeta(indexID, "group-position", collectionID, index)
+					e.addMeta(indexID, "group-position", collectionID, index, indexAttributes...)
 					e.addRefinements(indexID, indexRefinements)
 				}
 			}
@@ -313,18 +322,12 @@ func (e *metadataEditor) updateSeries(u *Information, clear map[string]bool, met
 	} else {
 		for _, v := range []struct{ name, value string }{{"calibre:series", series}, {"calibre:series_index", index}} {
 			if v.value != "" && (v.name != "calibre:series_index" || series != "") {
-				refinements := seriesRefinements
+				attributes := seriesAttributes
 				if v.name == "calibre:series_index" {
-					refinements = indexRefinements
+					attributes = indexAttributes
 				}
 				attrs := []xml.Attr{attr("name", v.name), attr("content", v.value)}
-				id := ""
-				if len(refinements) != 0 {
-					id = e.newID()
-					attrs = append(attrs, attr("id", id))
-				}
-				e.addElement(opfNamespace, "meta", "", attrs...)
-				e.addRefinements(id, refinements)
+				e.addElement(opfNamespace, "meta", "", append(attrs, attributes...)...)
 			}
 		}
 	}
@@ -365,7 +368,7 @@ func (e *metadataEditor) removeRefinements() {
 }
 
 func (e *metadataEditor) apply(data []byte) ([]byte, error) {
-	generated, err := encodeMetadata(e.elements, e.epub3)
+	generated, err := encodeMetadata(e.elements)
 	if err != nil {
 		return nil, err
 	}

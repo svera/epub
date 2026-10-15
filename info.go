@@ -3,30 +3,39 @@ package epub
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 )
 
-// MetadataValue is a text value with optional refinements. The writer
+// MetadataValue is a text value with optional refinements and XML attributes. The writer
 // sets each refinement's Refines target automatically.
-// EPUB 2 uses JSON legacy meta entries; EPUB 3 uses native refinement elements.
-// In JSON, plain values are strings; refined values are objects.
+// Refinements require EPUB 3; Attributes works in both EPUB versions.
+// In JSON, plain values are strings; values with refinements or attributes are objects.
 type MetadataValue struct {
 	Value       string
 	Refinements []Meta
+	Attributes  []xml.Attr `json:",omitempty"`
 }
 
 func (v MetadataValue) String() string { return v.Value }
 
-// MarshalJSON preserves the string representation of unrefined values.
+// MarshalJSON preserves plain strings and explicit empty attribute lists.
 func (v MetadataValue) MarshalJSON() ([]byte, error) {
-	if v.Refinements == nil {
+	if v.Refinements == nil && v.Attributes == nil {
 		return json.Marshal(v.Value)
 	}
 	type value MetadataValue
-	return json.Marshal(value(v))
+	var attributes *[]xml.Attr
+	if v.Attributes != nil {
+		attributes = &v.Attributes
+	}
+	return json.Marshal(struct {
+		value
+		Attributes *[]xml.Attr `json:",omitempty"`
+	}{value(v), attributes})
 }
 
-// UnmarshalJSON accepts a string or a value with attached refinements.
+// UnmarshalJSON accepts a string or a value with refinements or attributes.
 func (v *MetadataValue) UnmarshalJSON(data []byte) error {
 	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
 		*v = MetadataValue{}
@@ -116,10 +125,10 @@ type Information struct {
 func (m Information) MarshalJSON() ([]byte, error) {
 	type information Information
 	var series, index *MetadataValue
-	if m.Series.Value != "" || m.Series.Refinements != nil {
+	if m.Series.Value != "" || m.Series.Refinements != nil || m.Series.Attributes != nil {
 		series = &m.Series
 	}
-	if m.SeriesIndex.Value != "" || m.SeriesIndex.Refinements != nil {
+	if m.SeriesIndex.Value != "" || m.SeriesIndex.Refinements != nil || m.SeriesIndex.Attributes != nil {
 		index = &m.SeriesIndex
 	}
 	return json.Marshal(struct {
@@ -133,7 +142,8 @@ func (m Information) MarshalJSON() ([]byte, error) {
 type Identifier struct {
 	Scheme      string
 	Value       string
-	Refinements []Meta `json:",omitempty"`
+	Refinements []Meta     `json:",omitempty"`
+	Attributes  []xml.Attr `json:",omitempty"`
 }
 
 // Author represents an author.
@@ -143,21 +153,24 @@ type Author struct {
 	Role     string
 	// Refinements contains properties targeting this author.
 	// Explicit refinements override Role and FileAs properties of the same name.
-	Refinements []Meta `json:",omitempty"`
+	Refinements []Meta     `json:",omitempty"`
+	Attributes  []xml.Attr `json:",omitempty"`
 }
 
 // Date represents an event.
 type Date struct {
 	Stamp       string
 	Event       string
-	Refinements []Meta `json:",omitempty"`
+	Refinements []Meta     `json:",omitempty"`
+	Attributes  []xml.Attr `json:",omitempty"`
 }
 
 // GenericMetadata represents a generic metadata.
 type GenericMetadata struct {
 	Name        string
 	Content     string
-	Refinements []Meta `json:",omitempty"`
+	Refinements []Meta     `json:",omitempty"`
+	Attributes  []xml.Attr `json:",omitempty"`
 }
 
 func (m *Information) refinementGroups() [][]Meta {
@@ -219,6 +232,7 @@ func getMeta(mdata *Metadata) *Information {
 			Value:       id.Value,
 			Scheme:      id.Scheme,
 			Refinements: refinementsFor(id.ID, mdata.Meta),
+			Attributes:  id.Attributes,
 		})
 	}
 
@@ -235,6 +249,7 @@ func getMeta(mdata *Metadata) *Information {
 			Stamp:       date.Value,
 			Event:       date.Event,
 			Refinements: refinementsFor(date.ID, mdata.Meta),
+			Attributes:  date.Attributes,
 		})
 	}
 
@@ -250,6 +265,7 @@ func getMeta(mdata *Metadata) *Information {
 				Name:        meta.Name,
 				Content:     meta.Content,
 				Refinements: refinements,
+				Attributes:  meta.Attributes,
 			})
 		}
 	}
@@ -261,10 +277,11 @@ func seriesValues(meta []MetaLegacy) (series, index MetadataValue) {
 	series.Value, index.Value = getSeries(meta)
 	if collection := seriesCollection(meta); collection != nil {
 		series.Refinements = refinementsFor(collection.ID, meta, "collection-type", "group-position")
+		series.Attributes = collection.Attributes
 		for _, m := range meta {
 			if m.Meta != nil && m.Refines == "#"+collection.ID && m.Property == "group-position" {
 				index.Refinements = refinementsFor(m.ID, meta)
-				break
+				index.Attributes = m.Attributes
 			}
 		}
 	} else {
@@ -272,8 +289,10 @@ func seriesValues(meta []MetaLegacy) (series, index MetadataValue) {
 			switch m.Name {
 			case "calibre:series":
 				series.Refinements = refinementsFor(m.ID, meta)
+				series.Attributes = m.Attributes
 			case "calibre:series_index":
 				index.Refinements = refinementsFor(m.ID, meta)
+				index.Attributes = m.Attributes
 			}
 		}
 	}
@@ -284,7 +303,7 @@ func metadataValues(elt []Element, meta []MetaLegacy) []MetadataValue {
 	s := make([]MetadataValue, len(elt))
 
 	for i, e := range elt {
-		s[i] = MetadataValue{Value: e.Value, Refinements: refinementsFor(e.ID, meta)}
+		s[i] = MetadataValue{Value: e.Value, Refinements: refinementsFor(e.ID, meta), Attributes: e.Attributes}
 	}
 	return s
 }
@@ -311,9 +330,10 @@ func refinementsFor(id string, meta []MetaLegacy, excluded ...string) []Meta {
 
 func getAuth(auth AuthorElt, meta []MetaLegacy) Author {
 	a := Author{
-		FullName: auth.Value,
-		Role:     auth.Role,
-		FileAs:   auth.FileAs,
+		FullName:   auth.Value,
+		Role:       auth.Role,
+		FileAs:     auth.FileAs,
+		Attributes: auth.Attributes,
 	}
 
 	for _, m := range meta {
@@ -354,13 +374,13 @@ func getTitles(elt []Element, meta []MetaLegacy) (title []MetadataValue, subtitl
 				if m.Property == "title-type" {
 					switch m.Value {
 					case "subtitle":
-						subtitle = append(subtitle, MetadataValue{Value: e.Value, Refinements: refinementsFor(e.ID, meta, "title-type")})
+						subtitle = append(subtitle, MetadataValue{Value: e.Value, Refinements: refinementsFor(e.ID, meta, "title-type"), Attributes: e.Attributes})
 						goto nextElt
 					}
 				}
 			}
 		}
-		title = append(title, MetadataValue{Value: e.Value, Refinements: refinementsFor(e.ID, meta)})
+		title = append(title, MetadataValue{Value: e.Value, Refinements: refinementsFor(e.ID, meta), Attributes: e.Attributes})
 	nextElt:
 	}
 
