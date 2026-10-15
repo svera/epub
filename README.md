@@ -12,7 +12,6 @@
 - **Package Document Parsing**: Full support for EPUB OPF (Open Packaging Format) files
 - **Resource Access**: Walk through EPUB files, publication resources, and reading content
 - **EPUB 2 & 3.2 Compatible**: Works with both legacy and modern EPUB formats
-- **Series Support**: Extract series information from Calibre and EPUB3 metadata
 - **Metadata Writing**: Apply partial updates without rewriting unrelated package XML or publication resources
 
 ## Installation
@@ -63,52 +62,27 @@ err := epub.WriteMetadataToFile("book.epub", &epub.Information{
     Creator: []epub.Author{
         {FullName: "Jane Doe", FileAs: "Doe, Jane", Role: "aut"},
     },
-    Subject: []epub.MetadataValue{}, // Clear subjects.
-    Series: epub.NewMetadataValue("My Series"),
 })
 if err != nil {
     panic(err)
 }
 ```
 
-When marshaling updates to JSON, `Information`'s `omitempty` tags omit empty
-optional lists; include an explicit `[]` in JSON to clear those fields.
-
-Nil slices preserve existing fields; empty, non-nil slices clear fields.
-All text fields, including `Series` and `SeriesIndex`, use `MetadataValue`,
+Text fields use `MetadataValue`,
 whose `Value *string` distinguishes omitted text from explicitly empty text.
-A nil `Value` preserves the existing text. For series fields, an empty string
-clears the field:
-
-```go
-err := epub.WriteMetadataToFile("book.epub", &epub.Information{
-    SeriesIndex: epub.NewMetadataValue(""), // Clear only the index.
-})
-```
-
-The CLI accepts `{"SeriesIndex":""}` or `{"Series":""}` without a separate flag.
-Omitted fields and JSON `null` leave values unchanged. Clearing `Series` also
-clears its index; clearing only `SeriesIndex` preserves the series name.
+A nil `Value` preserves the existing text.
+Omitted fields and JSON `null` leave values unchanged.
 An object with an omitted or null `Value` can update only refinements or
-attributes, such as `{"Series":{"Attributes":[]}}`.
-In text lists, entries match existing values by position. For example,
-`{"Title":[{"Attributes":[]}]}` preserves the first title's text and refinements
-while clearing its attributes. Omitted property lists preserve those properties;
-explicit empty lists clear them. An entry without `Value` requires an existing
+attributes without repeating the text.
+In text lists, entries match existing values by position.
+Omitted property lists preserve those properties.
+An entry without `Value` requires an existing
 value at that position; otherwise the update fails without changing the file.
 List updates still replace the entire list, so include entries for every value
-you want to retain. An explicit empty string writes empty text; use `[]` to
-remove all values of a list field.
-The CLI no longer supports `--clear`; supply empty series strings in the update
-JSON instead. The Go `clearFields` argument remains a deprecated compatibility
-option and overrides supplied values.
+you want to retain. An explicit empty string writes empty text.
 Title and subtitle updates are independent. Supplying replacement text also
-replaces its associated refinements and attributes. `Meta` replaces legacy name/content metadata except
-Calibre series entries; use `Series` and `SeriesIndex` to update those. Series
-updates use Calibre metadata for EPUB 2 and collection metadata for EPUB 3.
+replaces its associated refinements and attributes.
 EPUB 3 updates refresh the `dcterms:modified` timestamp.
-Collections explicitly typed as something other than a series are preserved
-and are not reported as series metadata.
 The primary identifier cannot be removed, since the package references it.
 
 #### Field refinements
@@ -118,12 +92,12 @@ existing `Meta` type. Callers choose the property names; the library does not
 define application-specific properties.
 
 Text fields (`Title`, `SubTitle`, `Language`, `Subject`, etc.) now use
-`[]MetadataValue` instead of `[]string`. `Series` and `SeriesIndex` use
-the same `MetadataValue` type with an optional `Value *string`. Identifiers, authors, dates, and legacy name/content metadata
+`[]MetadataValue` instead of `[]string`, with an optional `Value *string`.
+Identifiers, authors, dates, and legacy name/content metadata
 retain their existing types and each has a `Refinements []Meta` field.
 This is a Go API change: use `.String()` to read text safely, or inspect `.Value`
 to distinguish omitted text from an explicit empty string.
-Construct text and series updates with `NewMetadataValue`,
+Construct text updates with `NewMetadataValue`,
 or use `MetadataValue{Refinements: ...}` / `MetadataValue{Attributes: ...}` for
 property-only updates without repeating the text.
 
@@ -160,11 +134,9 @@ IDs must be unique.
 `Prefixes` maps vocabulary prefixes to absolute IRIs and merges them into the
 package's `prefix` attribute. Existing declarations are preserved; conflicting
 mappings are rejected. Reading metadata returns these declarations and refinements,
-with standard author, subtitle, and series properties exposed through convenience
-fields. `Series.Refinements` targets the collection; `SeriesIndex.Refinements`
-targets its position.
+with standard author and subtitle properties exposed through convenience fields.
 
-The CLI accepts plain strings or refined objects for text and series values,
+The CLI accepts plain strings or refined objects for text values,
 including a mixture in the same list:
 
 ```json
@@ -389,8 +361,8 @@ epub file1.epub file2.epub
 # Update metadata in place and print the result
 epub --write metadata.json mybook.epub
 
-# Read updates from stdin; omitted fields stay unchanged, [] clears a list
-printf '%s' '{"Title":["New Title"],"Subject":[],"Series":""}' | epub --write - mybook.epub
+# Read updates from stdin; omitted fields stay unchanged
+printf '%s' '{"Title":["New Title"]}' | epub --write - mybook.epub
 ```
 
 The JSON update object accepts the same field names as `Information`.
@@ -417,9 +389,7 @@ each file is replaced independently, and a failure results in a nonzero exit cod
     }
   ],
   "Language": ["en"],
-  "Publisher": ["Example Publisher"],
-  "Series": "My Series",
-  "SeriesIndex": "1"
+  "Publisher": ["Example Publisher"]
 }
 ```
 
