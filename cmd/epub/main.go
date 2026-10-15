@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -174,13 +175,10 @@ func main() {
 		if write == "-" {
 			update, err = readMetadataUpdate(os.Stdin)
 		} else {
-			var f *os.File
-			f, err = os.Open(write)
+			var data []byte
+			data, err = os.ReadFile(write)
 			if err == nil {
-				update, err = readMetadataUpdate(f)
-				if closeErr := f.Close(); err == nil {
-					err = closeErr
-				}
+				update, err = readMetadataUpdate(bytes.NewReader(data))
 			}
 		}
 		if err != nil {
