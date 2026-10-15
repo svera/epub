@@ -3,7 +3,8 @@ package epub
 import (
 	"encoding/xml"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 
 	"github.com/beevik/etree"
 )
@@ -25,7 +26,7 @@ func newXMLNamespaces(inherited, preferred map[string]string) (*xmlNamespaces, e
 		n.bindings[prefix] = uri
 	}
 	n.bindings["xml"] = xmlNamespace
-	for _, prefix := range sortedNamespacePrefixes(preferred) {
+	for _, prefix := range slices.Sorted(maps.Keys(preferred)) {
 		uri := preferred[prefix]
 		if err := validatePrefix(prefix, uri); err != nil {
 			return nil, fmt.Errorf("XML namespace: %w", err)
@@ -46,22 +47,13 @@ func newXMLNamespaces(inherited, preferred map[string]string) (*xmlNamespaces, e
 	return n, nil
 }
 
-func sortedNamespacePrefixes(bindings map[string]string) []string {
-	prefixes := make([]string, 0, len(bindings))
-	for prefix := range bindings {
-		prefixes = append(prefixes, prefix)
-	}
-	sort.Strings(prefixes)
-	return prefixes
-}
-
-func (n *xmlNamespaces) name(name xml.Name, attribute bool) xml.Name {
+func (n *xmlNamespaces) name(name xml.Name, attribute bool) string {
 	if name.Space == "" {
-		return name
+		return name.Local
 	}
 	prefix, found := n.preferred[name.Space]
 	if !found {
-		for _, candidate := range sortedNamespacePrefixes(n.bindings) {
+		for _, candidate := range slices.Sorted(maps.Keys(n.bindings)) {
 			if n.bindings[candidate] == name.Space && (!attribute || candidate != "") {
 				prefix, found = candidate, true
 				break
@@ -87,13 +79,13 @@ func (n *xmlNamespaces) name(name xml.Name, attribute bool) xml.Name {
 		n.bindings[prefix], n.added[prefix] = name.Space, name.Space
 	}
 	if prefix != "" {
-		name.Local = prefix + ":" + name.Local
+		return prefix + ":" + name.Local
 	}
-	return xml.Name{Local: name.Local}
+	return name.Local
 }
 
 func (n *xmlNamespaces) declare(metadata *etree.Element) {
-	for _, prefix := range sortedNamespacePrefixes(n.added) {
+	for _, prefix := range slices.Sorted(maps.Keys(n.added)) {
 		metadata.CreateAttr("xmlns:"+prefix, n.added[prefix])
 	}
 }

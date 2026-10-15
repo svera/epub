@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"slices"
 )
 
 // MetadataValue is a text value with optional refinements and XML attributes. The writer
@@ -359,11 +360,7 @@ func refinementsFor(id string, meta []MetaLegacy, excluded ...string) []Meta {
 		if m.Meta == nil || m.Refines != "#"+id || m.Property == "" {
 			continue
 		}
-		skip := false
-		for _, property := range excluded {
-			skip = skip || m.Property == property
-		}
-		if !skip {
+		if !slices.Contains(excluded, m.Property) {
 			values = append(values, *m.Meta)
 		}
 	}

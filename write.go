@@ -135,7 +135,6 @@ func WriteMetadataToFile(path string, updates *Information, clearFields ...strin
 
 type metadataChild struct {
 	element    *etree.Element
-	attributes []xml.Attr
 	name       xml.Name
 	id         string
 	refines    string
@@ -150,14 +149,6 @@ type packageEditState struct {
 	children   []metadataChild
 	ids        map[string]bool
 	namespaces map[string]string
-}
-
-func (p *packageEditState) addID(id string) error {
-	if p.ids[id] {
-		return fmt.Errorf("duplicate XML ID %q", id)
-	}
-	p.ids[id] = true
-	return nil
 }
 
 func parsePackageXML(data []byte) (*packageEditState, error) {
@@ -198,9 +189,10 @@ func parsePackageXML(data []byte) (*packageEditState, error) {
 	collectIDs = func(element *etree.Element) error {
 		for _, a := range element.Attr {
 			if a.Space == "" && a.Key == "id" {
-				if err := p.addID(a.Value); err != nil {
-					return err
+				if p.ids[a.Value] {
+					return fmt.Errorf("duplicate XML ID %q", a.Value)
 				}
+				p.ids[a.Value] = true
 			}
 		}
 		for _, child := range element.ChildElements() {
@@ -219,16 +211,6 @@ func parsePackageXML(data []byte) (*packageEditState, error) {
 			id: element.SelectAttrValue("id", ""), refines: element.SelectAttrValue("refines", ""),
 			property: element.SelectAttrValue("property", ""), legacyName: element.SelectAttrValue("name", ""),
 		}
-		for _, a := range element.Attr {
-			if a.Space == "xmlns" || a.Space == "" && a.Key == "xmlns" {
-				continue
-			}
-			space := a.NamespaceURI()
-			if a.Space == "xml" {
-				space = xmlNamespace
-			}
-			child.attributes = append(child.attributes, xml.Attr{Name: xml.Name{Space: space, Local: a.Key}, Value: a.Value})
-		}
 		p.children = append(p.children, child)
 	}
 	return p, nil
@@ -246,7 +228,7 @@ func buildMetadata(elements []metadataElement, namespaces *xmlNamespaces) ([]*et
 		if !validXMLText(value.value) {
 			return nil, fmt.Errorf("invalid XML text in metadata")
 		}
-		element := etree.NewElement(namespaces.name(value.name, false).Local)
+		element := etree.NewElement(namespaces.name(value.name, false))
 		seen := make(map[xml.Name]bool)
 		for _, a := range value.attributes {
 			if !vocabularyPrefix.MatchString(a.Name.Local) || a.Name.Local == "xmlns" ||
@@ -260,7 +242,7 @@ func buildMetadata(elements []metadataElement, namespaces *xmlNamespaces) ([]*et
 			if !validXMLText(a.Value) || !validXMLText(a.Name.Space) {
 				return nil, fmt.Errorf("invalid XML text in %s attribute %s", value.name.Local, a.Name.Local)
 			}
-			element.CreateAttr(namespaces.name(a.Name, true).Local, a.Value)
+			element.CreateAttr(namespaces.name(a.Name, true), a.Value)
 		}
 		element.SetText(value.value)
 		result = append(result, element)
@@ -289,7 +271,8 @@ func updatePackageMetadata(data []byte, u *Information, clear map[string]bool) (
 	markSubtitles(children, pkg.Metadata.Meta)
 	editor := metadataEditor{
 		source: source, removed: make([]bool, len(children)),
-		epub3: strings.HasPrefix(pkg.Version, "3"),
+		epub3:                strings.HasPrefix(pkg.Version, "3"),
+		preservedRefinements: make(map[string]bool),
 	}
 	if err := editor.prepareRefinements(u.refinementGroups()); err != nil {
 		return nil, err

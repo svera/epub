@@ -3,6 +3,7 @@ package epub
 import (
 	"encoding/xml"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -112,21 +113,23 @@ func (e *metadataEditor) updateTextFields(u, existing *Information) error {
 				}
 				value.Value = f.existing[i].Value
 				if value.Attributes == nil {
-					for _, a := range previous[i].attributes {
-						if a.Name.Space == "xmlns" || a.Name.Space == "http://www.w3.org/2000/xmlns/" ||
-							(a.Name.Space == "" && (a.Name.Local == "id" || a.Name.Local == "xmlns")) {
+					for _, a := range previous[i].element.Attr {
+						if a.Space == "xmlns" || a.Space == "" && (a.Key == "id" || a.Key == "xmlns") {
 							continue
 						}
-						value.Attributes = append(value.Attributes, a)
+						space := a.NamespaceURI()
+						if a.Space == "xml" {
+							space = xmlNamespace
+						}
+						value.Attributes = append(value.Attributes, xml.Attr{
+							Name: xml.Name{Space: space, Local: a.Key}, Value: a.Value,
+						})
 					}
 				}
 			}
 			id := e.elementID(previous, i)
 			e.addElement(dcNamespace, f.name, value.String(), append([]xml.Attr{attr("id", id)}, value.Attributes...)...)
 			if preserveRefinements {
-				if e.preservedRefinements == nil {
-					e.preservedRefinements = make(map[string]bool)
-				}
 				e.preservedRefinements[id] = true
 			} else {
 				e.addRefinements(id, value.Refinements)
@@ -330,25 +333,24 @@ func (e *metadataEditor) updateSeries(u *Information, clear map[string]bool, met
 			}
 		}
 	} else {
-		for _, v := range []struct{ name, value string }{{"calibre:series", series}, {"calibre:series_index", index}} {
-			if v.value != "" && (v.name != "calibre:series_index" || series != "") {
-				attributes := seriesAttributes
-				if v.name == "calibre:series_index" {
-					attributes = indexAttributes
-				}
+		for _, v := range []struct {
+			name, value string
+			attributes  []xml.Attr
+		}{
+			{"calibre:series", series, seriesAttributes},
+			{"calibre:series_index", index, indexAttributes},
+		} {
+			if v.value != "" {
 				attrs := []xml.Attr{attr("name", v.name), attr("content", v.value)}
-				e.addElement(opfNamespace, "meta", "", append(attrs, attributes...)...)
+				e.addElement(opfNamespace, "meta", "", append(attrs, v.attributes...)...)
 			}
 		}
 	}
 	return nil
 }
 
-func (e *metadataEditor) refreshModifiedTime(prefixesChanged bool) {
-	changed := prefixesChanged || len(e.elements) != 0
-	for _, remove := range e.removed {
-		changed = changed || remove
-	}
+func (e *metadataEditor) refreshModifiedTime(declarationsChanged bool) {
+	changed := declarationsChanged || len(e.elements) != 0 || slices.Contains(e.removed, true)
 	if changed && e.epub3 {
 		for i, c := range e.source.children {
 			if c.name == (xml.Name{Space: opfNamespace, Local: "meta"}) && c.property == "dcterms:modified" && c.refines == "" {
